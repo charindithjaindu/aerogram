@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aerogram"
-version = "0.1.0"
+version = "0.1.1"
 description = "Pyrogram-style async library for Instagram direct messages (realtime MQTT + cookie auth)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "aerogram contributors" }]
 dependencies = [
     "httpx>=0.27",
-    "websockets>=12.0",
+    # additional_headers= in connect() requires websockets 14+; the old
+    # extra_headers= name is what <=13 expects
+    "websockets>=14.0",
 ]
 
 [project.optional-dependencies]

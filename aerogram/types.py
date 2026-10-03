@@ -137,6 +137,7 @@ class Message:
     """One DM item inside a thread."""
 
     client: Any = field(default=None, repr=False)  # backref, set by the library
+    thread: Optional["Thread"] = field(default=None, repr=False)  # cached thread, when known
     thread_id: str = ""
     item_id: str = ""
     message_id: str = ""

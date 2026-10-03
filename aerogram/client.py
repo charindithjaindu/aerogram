@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 import uuid
 from typing import Optional, Union
 
@@ -50,6 +51,8 @@ class Client:
         user_agent: str = DEFAULT_UA,
         workdir: str = ".",
         receive_own_messages: bool = True,
+        max_cached_threads: int = 500,
+        max_cached_messages: int = 200,
     ) -> None:
         """``name`` names the session file (``<workdir>/<name>.session.json``).
 
@@ -86,12 +89,17 @@ class Client:
         self.session.user_id = self.session.user_id or self.session.ds_user_id
 
         self.receive_own_messages = receive_own_messages
+        self.max_cached_threads = max_cached_threads
+        self.max_cached_messages = max_cached_messages
         self.user_id = self.session.user_id
         self.dispatcher = Dispatcher()
         self.api = HttpApi(self.session, user_agent)
         self._realtime: Optional[Realtime] = None
         self._threads: dict[str, Thread] = {}
+        self._user_thread_index: dict[str, str] = {}  # user id/username -> thread id
         self._started = False
+        self._last_seq_persist = 0.0
+        self._persisted_seq = self.session.seq_id
 
     # -- handler registration (Pyrogram style) -------------------------------
 
@@ -144,6 +152,10 @@ class Client:
         self._started = False
         if self._realtime:
             await self._realtime.stop()
+        try:
+            await self.dispatcher.wait(timeout=10.0)
+        except Exception:
+            log.exception("failed waiting for in-flight handlers")
         self._persist_session()
         await self.api.aclose()
         log.info("client stopped")
@@ -199,8 +211,36 @@ class Client:
         self.session.seq_id = int(inbox.get("seq_id") or 0)
         self.session.snapshot_at_ms = int(inbox.get("snapshot_at_ms") or 0)
         for t in inbox.get("inbox", {}).get("threads", []):
-            thread = Thread.parse(t)
-            self._threads[thread.id] = thread
+            self._store_thread(Thread.parse(t))
+
+    def _store_thread(self, thread: Thread) -> None:
+        """Merge a parsed thread into the cache and index its 1:1
+        participants for fast username/id → thread lookups.
+
+        Iris thread payloads are often partial patches; they must not
+        clobber a fully-populated cached entry (users, v2_id, messages).
+        """
+        cached = self._threads.pop(thread.id, None)
+        if cached is not None:
+            if not thread.users:
+                thread.users = cached.users
+            if not thread.v2_id:
+                thread.v2_id = cached.v2_id
+            if not thread.messages:
+                thread.messages = cached.messages
+        self._threads[thread.id] = thread
+        if not thread.is_group:
+            for u in thread.users:
+                if u.id and u.id != self.user_id:
+                    self._user_thread_index[u.id] = thread.id
+                if u.username:
+                    self._user_thread_index[u.username.lower()] = thread.id
+        while len(self._threads) > self.max_cached_threads:
+            oldest = next(iter(self._threads))
+            self._threads.pop(oldest, None)
+            stale = [k for k, v in self._user_thread_index.items() if v == oldest]
+            for k in stale:
+                del self._user_thread_index[k]
 
     # -- realtime plumbing ----------------------------------------------------
 
@@ -222,10 +262,12 @@ class Client:
             message.client = self
             if not self.receive_own_messages and message.is_sent_by_viewer:
                 return
-            message.thread = self._threads.get(delta.thread_id)
             cached = self._threads.get(delta.thread_id)
+            message.thread = cached
             if cached is not None:
                 cached.messages.insert(0, message)
+                if len(cached.messages) > self.max_cached_messages:
+                    del cached.messages[self.max_cached_messages:]
             await self.dispatcher.dispatch(MESSAGE, self, message)
         elif delta.is_removed_message:
             raw = delta.value_as_dict()
@@ -236,11 +278,19 @@ class Client:
         elif delta.is_thread_update:
             thread = Thread.parse(delta.value_as_dict())
             thread.id = thread.id or delta.thread_id
-            self._threads[thread.id] = thread
+            self._store_thread(thread)
             await self.dispatcher.dispatch(THREAD_UPDATE, self, thread)
         elif delta.is_unseen_count:
             value = delta.value_as_dict()
             await self.dispatcher.dispatch(UNSEEN_COUNT, self, value)
+        # Persist the iris cursor periodically: only saving on stop() means a
+        # crash replays every delta since the last graceful shutdown through
+        # the handlers again. 30s of at-most replay is the accepted tradeoff.
+        if (self.session.seq_id != self._persisted_seq
+                and time.monotonic() - self._last_seq_persist >= 30.0):
+            self._persisted_seq = self.session.seq_id
+            self._last_seq_persist = time.monotonic()
+            self._persist_session()
 
     # -- DM actions -----------------------------------------------------------
 
@@ -270,6 +320,10 @@ class Client:
         inbox, if any. Matching by username avoids the heavily rate-limited
         profile endpoint."""
         ref = str(user_ref)
+        cached_id = self._user_thread_index.get(ref) or \
+            self._user_thread_index.get(ref.lower())
+        if cached_id and cached_id in self._threads:
+            return self._threads[cached_id]
         cursor: Optional[str] = None
         for _ in range(scan_pages):
             threads, cursor = await self.get_inbox(cursor=cursor, limit=30)
@@ -301,7 +355,11 @@ class Client:
             resp = await self.api.send_text_message(
                 text, recipient_igids=[uid],
                 reply_to_message_id=reply_to.message_id if reply_to else None)
-            thread_id = ""
+            # a brand-new thread was just created server-side — pick it up so
+            # the returned Message carries the thread id and future sends to
+            # this user hit the cache instead of re-scanning the inbox
+            thread = await self.find_thread_for_user(to, scan_pages=1)
+            thread_id = thread.id if thread else ""
         raw = resp.get("data", {}).get("xig_direct_text_send_with_slide_messaging_response") or {}
         msg = Message(
             thread_id=thread_id,
@@ -368,12 +426,14 @@ class Client:
             replied_to_client_context=reply_to.client_context if reply_to else None,
         )
         raw = resp if isinstance(resp, dict) else {}
+        # the send-response timestamp is milliseconds; timestamp_us is µs
+        ts_ms = _ms(raw.get("timestamp"))
         msg = Message(
             thread_id=str(raw.get("thread_id") or thread_id),
             item_id=str(raw.get("item_id") or ""),
             message_id=str(raw.get("msg_id") or raw.get("message_id") or ""),
             user_id=str(self.user_id or ""),
-            timestamp_us=int(raw["timestamp"]) if str(raw.get("timestamp") or "").isdigit() else None,
+            timestamp_us=(ts_ms * 1000) if ts_ms else None,
             item_type="text",
             text=text,
             client_context=str(raw.get("client_context") or ""),
@@ -403,7 +463,7 @@ class Client:
         data = await self.api.inbox(cursor, limit)
         threads = [Thread.parse(t) for t in data.get("inbox", {}).get("threads", [])]
         for t in threads:
-            self._threads[t.id] = t
+            self._store_thread(t)
         next_cursor = data.get("inbox", {}).get("oldest_cursor")
         return threads, next_cursor
 
@@ -411,7 +471,7 @@ class Client:
                                  limit: int = 30) -> tuple[list[Message], str | None]:
         data = await self.api.thread(thread_id, cursor, limit)
         thread = Thread.parse(data.get("thread", {}))
-        self._threads[thread.id] = thread
+        self._store_thread(thread)
         next_cursor = thread.raw.get("oldest_cursor")
         return thread.messages, next_cursor
 
@@ -448,6 +508,9 @@ class Client:
 
     async def thread_id_for_user(self, user_id: str) -> str:
         """Find an existing 1:1 thread with ``user_id`` from the inbox."""
+        cached = self._user_thread_index.get(str(user_id))
+        if cached and cached in self._threads:
+            return cached
         threads, cursor = await self.get_inbox(limit=50)
         for t in threads:
             if not t.is_group and any(u.id == str(user_id) for u in t.users):

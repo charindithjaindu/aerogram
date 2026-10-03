@@ -19,9 +19,10 @@ import logging
 import random
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
+from .errors import SendError
 from .http_api import new_client_context
 from .mqtt import MqttClient
 from .session import Session
@@ -104,7 +105,7 @@ class Delta:
 @dataclass
 class _PendingSend:
     client_context: str
-    future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
+    future: asyncio.Future
 
 
 class Realtime:
@@ -177,6 +178,9 @@ class Realtime:
     # -- subscription -------------------------------------------------------
 
     async def _on_mqtt_reconnected(self, is_reconnect: bool) -> None:
+        # A fresh CONNACK is a fresh chance for the iris subscription —
+        # reset the resnapshot counter for the new connection era.
+        self._iris_resnapshots = 0
         # MQTT SUBSCRIBEs for the known topics are sent by MqttClient itself;
         # here we only (re-)establish the iris subscription with the latest
         # sequence id so missed deltas are replayed.
@@ -261,8 +265,13 @@ class Realtime:
             # stale cursor: refresh seq_id/snapshot via REST resnapshot, then retry
             self._iris_resnapshots += 1
             if self._iris_resnapshots > 5:
-                log.error("iris resnapshot loop — giving up after %d attempts",
+                # Stay connected-but-deaf is the worst outcome (the bot looks
+                # alive and silently receives nothing), so tear the transport
+                # down and let the reconnect loop try again from scratch.
+                log.error("iris resnapshot loop — forcing reconnect after %d attempts",
                           self._iris_resnapshots)
+                if self._mqtt:
+                    await self._mqtt.force_reconnect()
                 return
             await asyncio.sleep(min(2.0 * self._iris_resnapshots, 10))
             if self._resnapshot_cb:
@@ -287,28 +296,40 @@ class Realtime:
         if isinstance(pl, dict):
             cc = str(pl.get("client_context") or "")
         pending = self._pending_sends.pop(cc, None) if cc else None
-        if pending is None and self._pending_sends:
-            # response didn't echo client_context: resolve the oldest waiter
-            oldest_key = next(iter(self._pending_sends))
-            pending = self._pending_sends.pop(oldest_key)
+        if pending is None and len(self._pending_sends) == 1:
+            # response didn't echo client_context, but exactly one send is
+            # in flight — unambiguous. With several in flight we can't guess
+            # which one this answers; better to let them time out than to
+            # hand one caller another's response.
+            pending = self._pending_sends.pop(next(iter(self._pending_sends)))
+        elif pending is None and self._pending_sends:
+            log.warning("send response without client_context while %d sends "
+                        "are pending — cannot pair it", len(self._pending_sends))
         if pending and not pending.future.done():
             if ok:
                 pending.future.set_result(resp.get("payload"))
             else:
-                pending.future.set_exception(RuntimeError(f"send rejected: {resp}"))
+                pending.future.set_exception(
+                    SendError(f"send rejected: {resp}"))
 
     # -- sending ------------------------------------------------------------
 
     async def _send_item(self, payload: dict, timeout: float = 15.0) -> dict:
         if not self._mqtt or not self._mqtt.connected:
-            raise RuntimeError("realtime not connected")
+            raise SendError("realtime not connected")
         cc = payload.setdefault("client_context", new_client_context())
         payload.setdefault("device_id", self._device_id)
-        pending = _PendingSend(client_context=str(cc))
+        pending = _PendingSend(client_context=str(cc),
+                               future=asyncio.get_running_loop().create_future())
         self._pending_sends[str(cc)] = pending
         try:
             await self._mqtt.publish("/ig_send_message", json.dumps(payload), qos=1)
-            return await asyncio.wait_for(pending.future, timeout=timeout)
+            try:
+                return await asyncio.wait_for(pending.future, timeout=timeout)
+            except asyncio.TimeoutError:
+                raise SendError(
+                    f"no response on {TOPIC_SEND_RESPONSE} for "
+                    f"client_context={cc} within {timeout:.0f}s") from None
         finally:
             self._pending_sends.pop(str(cc), None)
 

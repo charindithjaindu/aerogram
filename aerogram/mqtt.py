@@ -16,7 +16,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 import websockets
 
@@ -146,6 +146,7 @@ class MqttClient:
         client_id: str = "mqttwsclient",
         keepalive: int = 15,
         max_backoff: float = 60.0,
+        dead_timeout: float | None = None,
     ) -> None:
         self._url = url
         self._headers = ws_headers
@@ -155,8 +156,13 @@ class MqttClient:
         self._on_packet = on_packet
         self._on_reconnect = on_reconnect
         self._max_backoff = max_backoff
+        # The broker only speaks when answering our PINGREQs (one every
+        # ``keepalive`` seconds), so total silence for several keepalive
+        # intervals means the connection is dead even if TCP hasn't
+        # noticed yet (half-open sockets can sit in the kernel for ~15min).
+        self._dead_timeout = dead_timeout or max(45.0, keepalive * 3)
 
-        self._ws: websockets.WebSocketClientProtocol | None = None  # type: ignore[attr-defined]
+        self._ws: Any = None
         self._send_lock = asyncio.Lock()
         self._packet_id = 0
         self._subscriptions: set[str] = set()
@@ -188,6 +194,18 @@ class MqttClient:
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):
+                pass
+
+    async def force_reconnect(self) -> None:
+        """Drop the current connection without stopping the client; the
+        run-loop reconnects with its usual backoff. Used when a protocol
+        layer above MQTT decides the session is unrecoverable as-is."""
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
                 pass
 
     async def subscribe(self, topic: str) -> None:
@@ -260,16 +278,25 @@ class MqttClient:
             max_size=20 * 1024 * 1024,
             ping_interval=None,  # MQTT-level ping instead of WS ping
         )
-        self._ws = ws
-        await ws.send(build_connect(self._client_id, self._username, self._keepalive))
-        raw = await asyncio.wait_for(ws.recv(), timeout=15)
-        packets = parse_packets(raw.encode() if isinstance(raw, str) else raw)
-        ptype, _flags, body = packets[0]
-        if ptype != CONNACK:
-            raise ProtocolError(f"expected CONNACK, got packet type {ptype}")
-        rc = body[1] if len(body) > 1 else -1
-        if rc != 0:
-            raise RealtimeError(f"MQTT CONNACK rejected: rc={rc} ({CONNACK_RC.get(rc, '?')})")
+        try:
+            self._ws = ws
+            await ws.send(build_connect(self._client_id, self._username, self._keepalive))
+            raw = await asyncio.wait_for(ws.recv(), timeout=15)
+            packets = parse_packets(raw.encode() if isinstance(raw, str) else raw)
+            ptype, _flags, body = packets[0]
+            if ptype != CONNACK:
+                raise ProtocolError(f"expected CONNACK, got packet type {ptype}")
+            rc = body[1] if len(body) > 1 else -1
+            if rc != 0:
+                raise RealtimeError(f"MQTT CONNACK rejected: rc={rc} ({CONNACK_RC.get(rc, '?')})")
+        except Exception:
+            # never leave a half-open socket behind for the next attempt
+            self._ws = None
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            raise
         log.info("MQTT connected (CONNACK rc=0)")
         for topic in self._subscriptions:
             await self._send(build_subscribe([(topic, 0)], self._next_packet_id()))
@@ -280,11 +307,13 @@ class MqttClient:
     async def _read_loop(self) -> None:
         ws = self._ws
         assert ws is not None
-        last_ping = time.monotonic()
-        ping_task = asyncio.create_task(self._ping_loop(lambda: last_ping))
+        last_rx = [time.monotonic()]  # single-element cell shared with the watchdog
+        ping_task = asyncio.create_task(self._ping_loop())
+        watchdog_task = asyncio.create_task(self._rx_watchdog(ws, last_rx))
         try:
             while True:
                 raw = await ws.recv()
+                last_rx[0] = time.monotonic()
                 if isinstance(raw, str):
                     if raw:
                         log.debug("Ignoring text frame: %r", raw[:100])
@@ -305,13 +334,32 @@ class MqttClient:
                         log.debug("Unhandled MQTT packet type %s", ptype)
         finally:
             ping_task.cancel()
+            watchdog_task.cancel()
             self._ws = None
             try:
                 await ws.close()
             except Exception:
                 pass
 
-    async def _ping_loop(self, _last_ping) -> None:
+    async def _rx_watchdog(self, ws, last_rx: list[float]) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._dead_timeout)
+                silent_for = time.monotonic() - last_rx[0]
+                if silent_for > self._dead_timeout:
+                    log.warning(
+                        "no MQTT traffic for %.0fs (keepalive is %ss) — "
+                        "assuming dead connection and forcing a reconnect",
+                        silent_for, self._keepalive)
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                    return
+        except asyncio.CancelledError:
+            pass
+
+    async def _ping_loop(self) -> None:
         # The web client pings on a fixed cadence matching the keepalive.
         try:
             while True:
@@ -319,6 +367,10 @@ class MqttClient:
                 await self._send(build_pingreq())
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            # A send failure also breaks the read loop, which triggers the
+            # reconnect — this task just ends quietly.
+            log.debug("ping loop ended (%s: %s)", type(e).__name__, e)
 
     async def _handle_publish(self, flags: int, body: bytes) -> None:
         qos = (flags >> 1) & 0x03
@@ -329,9 +381,11 @@ class MqttClient:
         if qos:
             pid = int.from_bytes(rest[:2], "big")
             rest = rest[2:]
+        # Ack before dispatching: a slow application handler must not delay
+        # the PUBACK, or the broker redelivers and handlers see duplicates.
+        if pid is not None:
+            await self._send(build_puback(pid))
         try:
             await self._on_packet(topic, rest, qos)
         except Exception:
             log.exception("on_packet handler failed for %s", topic)
-        if pid is not None:
-            await self._send(build_puback(pid))

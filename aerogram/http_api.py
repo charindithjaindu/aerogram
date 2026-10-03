@@ -29,6 +29,16 @@ DEFAULT_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
               "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 
 MAX_RETRIES = 4
+MAX_RETRY_AFTER = 60.0  # never sleep longer than this inside _request
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return float(value.strip())
+    except ValueError:
+        return None
 
 
 class HttpApi:
@@ -38,6 +48,7 @@ class HttpApi:
         self._ua = user_agent
         self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
         self._page_cache: dict = {}
+        self._page_lock = asyncio.Lock()
         self._req_counter = _Counter()
 
     async def aclose(self) -> None:
@@ -80,15 +91,23 @@ class HttpApi:
                     headers=self._headers(post=post))
             except httpx.HTTPError as e:
                 last_exc = e
+                # A timed-out POST may already have been applied server-side;
+                # retrying it can double-send. Only idempotent GETs retry on
+                # transport errors.
+                if post:
+                    raise InstaDMError(
+                        f"POST {url} failed ({type(e).__name__}: {e}) — not "
+                        "retried to avoid duplicating a possibly-applied "
+                        "mutation") from e
                 await asyncio.sleep(0.5 * (2 ** attempt) + random.random())
                 continue
 
             self._absorb_cookies(resp)
 
             if resp.status_code == 429:
-                retry_after = resp.headers.get("retry-after")
-                seconds = float(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
-                if attempt == MAX_RETRIES - 1:
+                retry_after = _parse_retry_after(resp.headers.get("retry-after"))
+                seconds = retry_after if retry_after is not None else float(2 ** attempt)
+                if attempt == MAX_RETRIES - 1 or seconds > MAX_RETRY_AFTER:
                     raise RateLimited("Instagram rate limit hit (429)", retry_after=seconds)
                 log.warning("429, backing off %.1fs", seconds)
                 await asyncio.sleep(seconds)
@@ -185,7 +204,7 @@ class HttpApi:
 
     async def upload_photo(self, data: bytes, filename: str = "photo.jpg") -> str:
         """Upload a photo via rupload; returns the ``upload_id`` for broadcasting."""
-        upload_id = str(int(asyncio.get_event_loop().time() * 1000)) + str(random.randint(100, 999))
+        upload_id = str(int(time.monotonic() * 1000)) + str(random.randint(100, 999))
         url = f"https://i.instagram.com/rupload_igphoto/{upload_id}"
         headers = {
             "Cookie": self.session.cookie_header,
@@ -219,14 +238,17 @@ class HttpApi:
     # -- misc -----------------------------------------------------------------
 
     async def download(self, url: str, path: str | None = None) -> str:
-        resp = await self._client.get(url, headers={"User-Agent": self._ua})
-        resp.raise_for_status()
         if path is None:
             from urllib.parse import urlparse
             name = urlparse(url).path.split("/")[-1].split("?")[0] or "media.bin"
             path = name
-        with open(path, "wb") as f:
-            f.write(resp.content)
+        # stream to disk: DM videos can be large enough that buffering the
+        # whole body would spike memory
+        async with self._client.stream("GET", url, headers={"User-Agent": self._ua}) as resp:
+            resp.raise_for_status()
+            with open(path, "wb") as f:
+                async for chunk in resp.aiter_bytes(1 << 16):
+                    f.write(chunk)
         return path
 
     # -- GraphQL (web "Slide" mutations, e.g. mark-thread-read) ----------------
@@ -242,43 +264,50 @@ class HttpApi:
         cached = self._page_cache
         if cached and time.time() - cached["t"] < 1800:
             return cached
-        h = {
-            "Cookie": self.session.cookie_header + "; dpr=2",
-            "User-Agent": self._ua,
-            "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
-                       "image/avif,image/webp,*/*;q=0.8"),
-            "Accept-Language": "en-US,en;q=0.9",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-User": "?1",
-            "Sec-Fetch-Dest": "document",
-            "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"macOS"',
-        }
-        resp = await self._client.get("https://www.instagram.com/direct/inbox/", headers=h)
-        self._absorb_cookies(resp)
-        html = resp.text
-        tokens: dict[str, str] = {"t": time.time()}
+        # serialize page fetches: graphql callers run concurrently (e.g. the
+        # upload + send inside send_photo) and each would otherwise render
+        # the full inbox HTML page just to extract the same tokens
+        async with self._page_lock:
+            cached = self._page_cache
+            if cached and time.time() - cached["t"] < 1800:
+                return cached
+            h = {
+                "Cookie": self.session.cookie_header + "; dpr=2",
+                "User-Agent": self._ua,
+                "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                           "image/avif,image/webp,*/*;q=0.8"),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-User": "?1",
+                "Sec-Fetch-Dest": "document",
+                "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
+            }
+            resp = await self._client.get("https://www.instagram.com/direct/inbox/", headers=h)
+            self._absorb_cookies(resp)
+            html = resp.text
+            tokens: dict[str, str] = {"t": time.time()}
 
-        def grab(pattern: str) -> str:
-            m = re.search(pattern, html)
-            return m.group(1) if m else ""
+            def grab(pattern: str) -> str:
+                m = re.search(pattern, html)
+                return m.group(1) if m else ""
 
-        tokens["fb_dtsg"] = grab(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"')
-        tokens["lsd"] = grab(r'"LSD",\[\],\{"token":"([^"]+)"')
-        tokens["__hs"] = grab(r'"haste_session":"([^"]+)"')
-        tokens["__spin_r"] = grab(r'"__spin_r":([0-9]+)')
-        tokens["__spin_b"] = grab(r'"__spin_b":"([^"]+)"') or "trunk"
-        tokens["__spin_t"] = grab(r'"__spin_t":([0-9]+)')
-        if not tokens["fb_dtsg"]:
-            raise AuthError(
-                "page render came back without a DTSG token — the session "
-                "cookies are likely invalid/expired")
-        log.debug("page tokens refreshed (dtsg=%.10s…)", tokens["fb_dtsg"])
-        self._page_cache = tokens
-        return tokens
+            tokens["fb_dtsg"] = grab(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"')
+            tokens["lsd"] = grab(r'"LSD",\[\],\{"token":"([^"]+)"')
+            tokens["__hs"] = grab(r'"haste_session":"([^"]+)"')
+            tokens["__spin_r"] = grab(r'"__spin_r":([0-9]+)')
+            tokens["__spin_b"] = grab(r'"__spin_b":"([^"]+)"') or "trunk"
+            tokens["__spin_t"] = grab(r'"__spin_t":([0-9]+)')
+            if not tokens["fb_dtsg"]:
+                raise AuthError(
+                    "page render came back without a DTSG token — the session "
+                    "cookies are likely invalid/expired")
+            log.debug("page tokens refreshed (dtsg=%.10s…)", tokens["fb_dtsg"])
+            self._page_cache = tokens
+            return tokens
 
     async def graphql(self, doc_id: str, variables: dict,
                       friendly_name: str) -> dict:
@@ -445,7 +474,6 @@ def _json_list(items: list[str]) -> str:
 
 def new_client_context() -> str:
     """Facebook-style offline threading id (like MercuryLocalIDs)."""
-    import time
     time_now = int(time.time() * 1000)
     rand = random.randint(0, 0x1FFFFF)
     return str((time_now << 21) | rand)
