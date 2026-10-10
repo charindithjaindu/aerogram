@@ -2,16 +2,36 @@
 
 ## Unreleased
 
-- **Fixed: `Client.start()` failed with `NotFoundError` on
-  `/direct_v2/inbox/`.** Instagram removed the REST inbox from the web API
-  (it now returns a 404 page). The iris cursor (`seq_id` /
-  `snapshot_at_ms`) is now seeded from `/direct_v2/get_badge_count/`, which
-  is still served, and the reconnect gap-heal uses it too. The inbox is
-  still tried to warm the thread cache, but a 404 there is no longer fatal.
-- New `HttpApi.badge_count()`.
-- Known gap: `get_inbox()`, `find_thread_for_user()` and sending by
-  username still depend on the removed endpoint. `reply_text()` and
-  `send_text(thread_id, ...)` are unaffected.
+Instagram removed the web REST DM API (`/direct_v2/inbox/`, `threads/…`,
+`seen`/`hide`/`mute`, `get_presence`, `broadcast/…` now return the HTML 404
+page). Reads moved to the GraphQL queries the web client itself uses — see
+the new *Reads* section of `docs/protocol.md`.
+
+- **Fixed: `Client.start()` failed with `NotFoundError`.** The iris cursor
+  and the first inbox page now come from one `PolarisDirectInboxQuery`
+  call, which also warms the thread cache; `/direct_v2/get_badge_count/`
+  is the fallback and the reconnect gap-heal.
+- **Fixed:** `get_inbox()` (paginated), `get_thread_history()` (paginated,
+  newest first), `find_thread_for_user()`, `thread_id_for_user()`,
+  `send_message()` / `send_photo()` by username, `mute_thread()`.
+- **Fixed: `user_by_username()`** — resolves through the profile page
+  document + `PolarisProfilePageContentQuery`; the REST profile endpoints
+  were 429ing persistently.
+- `mark_seen()` uses only the GraphQL mutation (REST fallback is gone) and
+  marks up to the newest message when the `mid.$…` id isn't cached.
+- New: `Client.get_thread()`, `Client.user_by_id()`,
+  `Thread.parse_slide()` / `Message.parse_slide()` / `Media.parse_slide()`,
+  `Thread.fbid`; `mute_thread(seconds=…)`.
+- `graphql()` now maps 429 → `RateLimited` and login redirects →
+  `AuthError`, handles multi-payload (`@defer`) responses, and re-renders
+  the token page once when `fb_dtsg` expires. The ~800KB token page is
+  therefore cached for 6h instead of 30min.
+- `hide_thread()` and `get_presence()` now raise `InstaDMError` (no web
+  replacement exists). Removed `HttpApi.upload_photo()` /
+  `broadcast_photo()` (dead `rupload`/`configure_photo` path; `send_photo()`
+  already used mercury uploads) and the REST `mark_seen`/`hide_thread`/
+  `get_presence`/`user_info_by_*` wrappers.
+- `X-ASBD-ID` updated to the web client's current `359341`.
 
 ## 0.1.1 — reliability & performance fixes
 

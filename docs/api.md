@@ -56,14 +56,17 @@ Client(name, *, cookies_file=None, cookies=None, session_string=None,
 
 | method                                                    | returns                  |
 |-----------------------------------------------------------|--------------------------|
-| `await get_inbox(cursor=None, limit=20)`                   | `(list[Thread], next_cursor)` |
-| `await get_thread_history(thread_id, cursor=None, limit=30)` | `(list[Message], older_cursor)` |
-| `await mark_seen(thread_id, item_id)`                      | read receipt             |
-| `await hide_thread(thread_id)` / `await mute_thread(thread_id, mute)` | inbox management |
-| `await get_presence()`                                     | presence dict            |
-| `await user_by_username(username)`                         | `User`                   |
+| `await get_inbox(cursor=None, limit=15)`                   | `(list[Thread], next_cursor)`; cursor is `None` on the last page |
+| `await get_thread(thread_id, refresh=False)`               | `Thread` (cache, else newest inbox page) |
+| `await get_thread_history(thread_id, cursor=None, limit=20)` | `(list[Message], older_cursor)`, newest first |
+| `await mark_seen(thread_id, item_id="")`                   | read receipt (up to newest if `item_id` unknown) |
+| `await mute_thread(thread_id, mute=True, seconds=None)`    | mute forever / for `seconds`, or unmute |
+| `await user_by_username(username)` / `await user_by_id(user_id)` | `User`             |
 | `await find_thread_for_user(username_or_id)`               | `Thread` or `None`       |
 | `await download(url, path=None)`                           | generic file download    |
+
+`hide_thread()` and `get_presence()` raise `InstaDMError`: Instagram removed
+both from the web API and the web client has no replacement.
 
 ## aerogram.Message
 
@@ -76,7 +79,7 @@ Methods: `reply_text`, `mark_seen`, `react`, `download_media`,
 
 ## aerogram.Thread
 
-Fields: `id`, `v2_id`, `users` (list[`User`]), `is_group`, `title`, `muted`,
+Fields: `id` (long thread id), `v2_id` (`thread_key`), `fbid` (`thread_fbid`), `users` (list[`User`]), `is_group`, `title`, `muted`,
 `marked_unread`, `viewer_id`, `messages`, `raw`.
 Method: `other_user(viewer_id="")` → the non-viewer participant.
 

@@ -7,3 +7,4 @@ session/
 !session/.gitkeep
 dist/
 build/
+*.egg-info/

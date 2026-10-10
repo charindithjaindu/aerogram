@@ -65,9 +65,9 @@ See [Media](guide-media.md) for how uploads work and current limitations
 ## Housekeeping
 
 ```python
-await app.hide_thread(thread_id)          # move out of the inbox
-await app.mute_thread(thread_id, True)
-await app.get_presence()                  # who's online
+await app.mute_thread(thread_id)                   # mute forever
+await app.mute_thread(thread_id, seconds=8 * 3600)  # mute for 8h
+await app.mute_thread(thread_id, mute=False)       # unmute
 ```
 
 ## Error handling

@@ -30,6 +30,9 @@ DEFAULT_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
 
 MAX_RETRIES = 4
 MAX_RETRY_AFTER = 60.0  # never sleep longer than this inside _request
+# Re-rendering the token page costs ~800KB. Tokens outlive this; graphql()
+# re-renders early when Instagram reports them expired.
+PAGE_TOKEN_TTL = 6 * 3600
 
 
 def _parse_retry_after(value: str | None) -> float | None:
@@ -163,84 +166,115 @@ class HttpApi:
                 f"Non-JSON response ({resp.status_code}): {resp.text[:200]!r}") from e
 
     # -- DM endpoints ---------------------------------------------------------
+    #
+    # Instagram removed the web REST DM routes (/direct_v2/inbox/, threads/…,
+    # seen/hide/mute, get_presence) — they now return the HTML 404 page. The
+    # web client reads DMs through persisted GraphQL queries instead; the doc
+    # ids below were captured from instagram.com's bundles.
 
-    async def inbox(self, cursor: str | None = None, limit: int = 20) -> dict:
-        params: dict[str, Any] = {"persistentBadging": "true", "use_unified_inbox": "true",
-                                  "limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-        return await self.get_json("/direct_v2/inbox/", params)
+    DOC_INBOX = "27909866362025854"              # PolarisDirectInboxQuery
+    DOC_INBOX_PAGE = "28774058922187457"         # IGDThreadListOffMsysPaginationQuery
+    DOC_THREAD_DETAIL = "29432273173041378"      # IGDThreadDetailQuery
+    DOC_MESSAGE_LIST = "29380270148264352"       # IGDMessageListOffMsysQuery
+    DOC_MUTE = "26360506043651125"               # IGDInboxInfoMuteToggleOffMsysMutation
+    DOC_PROFILE = "28036671149327607"            # PolarisProfilePageContentQuery
+
+    _THREAD_LIST_PV = {
+        "__relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider": True,
+        "__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider": 5,
+        "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": True,
+    }
+
+    async def inbox(self) -> dict:
+        """First inbox page plus the iris cursor.
+
+        Returns the ``get_slide_mailbox_for_iris_subscription`` object
+        (``iris_inactive_subscription_uq_seq_id``, ``threads_by_folder``,
+        mailbox ``id``) with ``request_start_time_ms`` folded in as the
+        snapshot time."""
+        js = await self.graphql(self.DOC_INBOX, {
+            "device_id_for_iris_subscription": self.session.device_id or self.session.ig_did,
+            "__relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider": False,
+            **self._THREAD_LIST_PV,
+        }, "PolarisDirectInboxQuery")
+        mailbox = (js.get("data") or {}).get("get_slide_mailbox_for_iris_subscription") or {}
+        meta = (js.get("extensions") or {}).get("server_metadata") or {}
+        mailbox["snapshot_at_ms"] = meta.get("request_start_time_ms") or int(time.time() * 1000)
+        return mailbox
+
+    async def inbox_page(self, mailbox_id: str, cursor: str, count: int = 15,
+                         folder: str = "INBOX") -> dict:
+        """Older inbox threads after ``cursor`` (``threads_by_folder``)."""
+        js = await self.graphql(self.DOC_INBOX_PAGE, {
+            "count": count, "cursor": cursor, "folder": folder, "id": mailbox_id,
+            "newer_than_timestamp_ms": None, **self._THREAD_LIST_PV,
+        }, "IGDThreadListOffMsysPaginationQuery")
+        return ((js.get("data") or {}).get("fetch__SlideMailbox") or {}).get("threads_by_folder") or {}
 
     async def badge_count(self) -> dict:
         """Unread badge + current iris ``seq_id`` / ``badge_count_at_ms``.
 
-        Still served on the web API after ``/direct_v2/inbox/`` was removed
-        there (404), so it is what seeds the realtime cursor."""
+        A cheap REST call (no page-token fetch) that is still served; used as
+        the cursor fallback when the GraphQL inbox fails."""
         return await self.get_json("/direct_v2/get_badge_count/", {"no_raven": "1"})
 
-    async def thread(self, thread_id: str, cursor: str | None = None, limit: int = 30) -> dict:
-        params: dict[str, Any] = {"limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-        return await self.get_json(f"/direct_v2/threads/{thread_id}/", params)
+    async def thread(self, thread_key: str, limit: int = 20) -> dict:
+        """A thread with its newest ``limit`` messages (``as_ig_direct_thread``).
+        ``thread_key`` is the short id (``Thread.v2_id``)."""
+        js = await self.graphql(self.DOC_THREAD_DETAIL, {
+            "min_uq_seq_id": None, "thread_fbid": thread_key,
+            "__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider": False,
+            "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": limit,
+        }, "IGDThreadDetailQuery")
+        node = (js.get("data") or {}).get("get_slide_thread_nullable") or {}
+        if not node.get("as_ig_direct_thread"):
+            raise NotFoundError(f"thread {thread_key} not found")
+        return node["as_ig_direct_thread"]
 
-    async def get_presence(self) -> dict:
-        return await self.get_json("/direct_v2/get_presence/", {})
+    async def thread_messages(self, thread_fbid: str, cursor: str, limit: int = 20) -> dict:
+        """Messages older than ``cursor`` (``slide_messages`` connection)."""
+        js = await self.graphql(self.DOC_MESSAGE_LIST, {
+            "after": cursor, "before": None, "first": limit, "last": None, "id": thread_fbid,
+            "newer_than_message_id": None, "older_than_message_id": None,
+            "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": limit,
+        }, "IGDMessageListOffMsysQuery")
+        node = ((js.get("data") or {}).get("fetch__SlideThread") or {}).get("as_ig_direct_thread") or {}
+        return node.get("slide_messages") or {}
 
-    async def mark_seen(self, thread_id: str, item_id: str) -> dict:
-        data = {"_uuid": self.session.device_id or str(uuid.uuid4()),
-                "use_unified_inbox": "true"}
-        return await self.post_json(f"/direct_v2/threads/{thread_id}/items/{item_id}/seen/", data)
+    async def mute_thread(self, thread_fbid: str, seconds: int = -1) -> dict:
+        """``seconds``: -1 mutes forever, 0 unmutes (the web client also
+        offers 28800 = 8h and 86400 = 24h)."""
+        return await self.graphql(self.DOC_MUTE, {
+            "mute_seconds": seconds, "offline_threading_id": new_client_context(),
+            "thread_fbid": thread_fbid,
+        }, "IGDInboxInfoMuteToggleOffMsysMutation")
 
-    async def hide_thread(self, thread_id: str) -> dict:
-        data = {"_uuid": self.session.device_id or str(uuid.uuid4())}
-        return await self.post_json(f"/direct_v2/threads/{thread_id}/hide/", data)
+    async def user_id_for_username(self, username: str) -> str:
+        """Resolve a username via the profile page document (the web client
+        does the same; the REST profile endpoints are aggressively 429'd)."""
+        resp = await self._client.get(f"https://www.instagram.com/{username}/",
+                                      headers=self._document_headers())
+        self._absorb_cookies(resp)
+        m = re.search(r'"profile_id":"(\d+)"', resp.text) or \
+            re.search(r'"page_id":"profilePage_(\d+)"', resp.text)
+        if resp.status_code == 404 or not m:
+            raise NotFoundError(f"user @{username} not found")
+        return m.group(1)
 
-    async def mute_thread(self, thread_id: str, mute: bool = True) -> dict:
-        path = "/direct_v2/threads/{}/mute/" if mute else "/direct_v2/threads/{}/unmute/"
-        data = {"_uuid": self.session.device_id or str(uuid.uuid4())}
-        return await self.post_json(path.format(thread_id), data)
-
-    async def user_info_by_username(self, username: str) -> dict:
-        return await self.get_json("/users/web_profile_info/", {"username": username})
-
-    async def user_info_by_id(self, user_id: str) -> dict:
-        return await self.get_json(f"/users/{user_id}/info/")
-
-    # -- uploads --------------------------------------------------------------
-
-    async def upload_photo(self, data: bytes, filename: str = "photo.jpg") -> str:
-        """Upload a photo via rupload; returns the ``upload_id`` for broadcasting."""
-        upload_id = str(int(time.monotonic() * 1000)) + str(random.randint(100, 999))
-        url = f"https://i.instagram.com/rupload_igphoto/{upload_id}"
-        headers = {
-            "Cookie": self.session.cookie_header,
-            "User-Agent": self._ua,
-            "X-IG-App-ID": "936619743392459",
-            "X-CSRFToken": self.session.csrftoken,
-            "X-Entity-Type": "image/jpeg",
-            "X-Entity-Name": filename,
-            "X-Entity-Length": str(len(data)),
-            "X-Instagram-Rupload-Params": '{"media_type":1,"upload_id":"' + upload_id + '"}',
-            "Offset": "0",
-            "Content-Type": "application/octet-stream",
-        }
-        resp = await self._client.post(url, content=data, headers=headers)
-        if resp.status_code != 200:
-            raise InstaDMError(f"photo upload failed: {resp.status_code} {resp.text[:200]}")
-        js = resp.json()
-        return str(js.get("upload_id") or upload_id)
-
-    async def broadcast_photo(self, thread_ids: list[str], upload_id: str,
-                              caption: str = "") -> dict:
-        data = {
-            "upload_id": upload_id,
-            "caption": caption,
-            "thread_ids": _json_list(thread_ids),
-            "_uuid": self.session.device_id or str(uuid.uuid4()),
-            "allow_full_aspect_ratio": "true",
-        }
-        return await self.post_json("/direct_v2/threads/broadcast/configure_photo/", data)
+    async def user_info(self, user_id: str) -> dict:
+        """Profile of ``user_id`` (``data.user`` of the profile page query)."""
+        js = await self.graphql(self.DOC_PROFILE, {
+            "enable_integrity_filters": True, "id": str(user_id),
+            "__relay_internal__pv__PolarisCannesGuardianExperienceEnabledrelayprovider": True,
+            "__relay_internal__pv__PolarisCASB976ProfileEnabledrelayprovider": False,
+            "__relay_internal__pv__PolarisWebSchoolsEnabledrelayprovider": False,
+            "__relay_internal__pv__PolarisRepostsConsumptionEnabledrelayprovider": True,
+            "__relay_internal__pv__PolarisShortDramaEnabledrelayprovider": True,
+        }, "PolarisProfilePageContentQuery")
+        user = (js.get("data") or {}).get("user")
+        if not user:
+            raise NotFoundError(f"user {user_id} not found")
+        return user
 
     # -- misc -----------------------------------------------------------------
 
@@ -260,6 +294,25 @@ class HttpApi:
 
     # -- GraphQL (web "Slide" mutations, e.g. mark-thread-read) ----------------
 
+    def _document_headers(self) -> dict[str, str]:
+        """Browser top-level navigation headers. Without ``Sec-Fetch-*`` /
+        ``sec-ch-ua`` Instagram renders an anonymous shell."""
+        return {
+            "Cookie": self.session.cookie_header + "; dpr=2",
+            "User-Agent": self._ua,
+            "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                       "image/avif,image/webp,*/*;q=0.8"),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-User": "?1",
+            "Sec-Fetch-Dest": "document",
+            "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
+        }
+
     async def _page_tokens(self) -> dict:
         """Load instagram.com as a browser would and extract the session tokens
         /api/graphql requires (fb_dtsg, lsd, haste session, spin revision...).
@@ -269,31 +322,17 @@ class HttpApi:
         an empty DTSG token.
         """
         cached = self._page_cache
-        if cached and time.time() - cached["t"] < 1800:
+        if cached and time.time() - cached["t"] < PAGE_TOKEN_TTL:
             return cached
         # serialize page fetches: graphql callers run concurrently (e.g. the
         # upload + send inside send_photo) and each would otherwise render
         # the full inbox HTML page just to extract the same tokens
         async with self._page_lock:
             cached = self._page_cache
-            if cached and time.time() - cached["t"] < 1800:
+            if cached and time.time() - cached["t"] < PAGE_TOKEN_TTL:
                 return cached
-            h = {
-                "Cookie": self.session.cookie_header + "; dpr=2",
-                "User-Agent": self._ua,
-                "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
-                           "image/avif,image/webp,*/*;q=0.8"),
-                "Accept-Language": "en-US,en;q=0.9",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-User": "?1",
-                "Sec-Fetch-Dest": "document",
-                "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"macOS"',
-            }
-            resp = await self._client.get("https://www.instagram.com/direct/inbox/", headers=h)
+            resp = await self._client.get("https://www.instagram.com/direct/inbox/",
+                                          headers=self._document_headers())
             self._absorb_cookies(resp)
             html = resp.text
             tokens: dict[str, str] = {"t": time.time()}
@@ -323,20 +362,37 @@ class HttpApi:
         Mirrors the browser's POST to ``/api/graphql``: dtsg/lsd CSRF tokens +
         haste-session params in the form, Sec-Fetch headers required.
         """
-        tok = await self._page_tokens()
-        data = self._auth_form(tok, self._req_counter.next())
-        data["fb_api_caller_class"] = "RelayModern"
-        data["fb_api_req_friendly_name"] = friendly_name
-        data["variables"] = json.dumps(variables, separators=(",", ":"))
-        data["doc_id"] = doc_id
-        headers = self._web_headers(tok, friendly_name)
-        resp = await self._client.post("https://www.instagram.com/api/graphql",
-                                       data=data, headers=headers)
-        self._absorb_cookies(resp)
-        if resp.status_code != 200:
-            raise InstaDMError(
-                f"graphql {friendly_name} failed: {resp.status_code} {resp.text[:200]}")
-        js = json.loads(self._strip_for_prefix(resp.text))
+        for attempt in range(2):
+            tok = await self._page_tokens()
+            data = self._auth_form(tok, self._req_counter.next())
+            data["fb_api_caller_class"] = "RelayModern"
+            data["fb_api_req_friendly_name"] = friendly_name
+            data["variables"] = json.dumps(variables, separators=(",", ":"))
+            data["doc_id"] = doc_id
+            headers = self._web_headers(tok, friendly_name)
+            resp = await self._client.post("https://www.instagram.com/api/graphql",
+                                           data=data, headers=headers)
+            self._absorb_cookies(resp)
+            if resp.status_code == 429:
+                raise RateLimited(f"graphql {friendly_name} rate limited (429)",
+                                  retry_after=_parse_retry_after(resp.headers.get("retry-after")))
+            if resp.status_code in (301, 302, 303, 307, 308):
+                raise AuthError(
+                    f"graphql {friendly_name} redirected to "
+                    f"{resp.headers.get('location', '')} — session cookies are invalid")
+            if resp.status_code != 200:
+                raise InstaDMError(
+                    f"graphql {friendly_name} failed: {resp.status_code} {resp.text[:200]}")
+            # @defer/@stream responses are newline-separated JSON payloads;
+            # the first one carries the data
+            body = self._strip_for_prefix(resp.text).lstrip()
+            js = json.loads(body.split("\n", 1)[0]) if "\n" in body else json.loads(body)
+            # 1357001/1357004: fb_dtsg/lsd expired — re-render the page once
+            if js.get("error") in (1357001, 1357004) and attempt == 0:
+                log.info("graphql page tokens expired; refreshing")
+                self._page_cache = {}
+                continue
+            break
         if js.get("error"):
             raise InstaDMError(
                 f"graphql {friendly_name} error {js.get('error')}: "
@@ -390,7 +446,7 @@ class HttpApi:
         h = self._headers(post=True, referer=referer)
         h["X-FB-LSD"] = tok["lsd"]
         h["X-FB-Friendly-Name"] = friendly_name
-        h["X-ASBD-ID"] = "129477"
+        h["X-ASBD-ID"] = "359341"
         h["X-IG-Max-Touch-Points"] = "0"
         h.pop("Content-Type", None)  # let httpx set the form type
         return h
@@ -472,11 +528,6 @@ class _Counter:
     def next(self) -> int:
         self._n += 1
         return self._n
-
-
-def _json_list(items: list[str]) -> str:
-    import json as _json
-    return _json.dumps(items)
 
 
 def new_client_context() -> str:

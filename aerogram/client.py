@@ -96,6 +96,7 @@ class Client:
         self.api = HttpApi(self.session, user_agent)
         self._realtime: Optional[Realtime] = None
         self._threads: dict[str, Thread] = {}
+        self._mailbox_id = ""  # GraphQL SlideMailbox id, needed for inbox pagination
         self._user_thread_index: dict[str, str] = {}  # user id/username -> thread id
         self._started = False
         self._last_seq_persist = 0.0
@@ -208,19 +209,33 @@ class Client:
         """Refresh the iris cursor (also used when the broker demands a
         resnapshot).
 
-        The web REST inbox (``/direct_v2/inbox/``) now 404s, so the cursor
-        comes from ``get_badge_count``. The inbox is still tried afterwards
-        to warm the thread cache, but its failure is not fatal."""
-        badge = await self.api.badge_count()
-        self.session.seq_id = int(badge.get("seq_id") or 0)
-        self.session.snapshot_at_ms = int(badge.get("badge_count_at_ms") or 0)
+        One GraphQL inbox call yields both the cursor and the first inbox
+        page, which warms the thread cache (usernames for ``message.thread``).
+        Falls back to the cheap REST badge count if GraphQL fails."""
         try:
-            inbox = await self.api.inbox()
-        except NotFoundError:
-            log.info("REST inbox unavailable; thread cache fills from realtime")
+            mailbox = await self.api.inbox()
+        except InstaDMError as e:
+            log.warning("GraphQL inbox failed (%s); seeding cursor from badge count", e)
+            badge = await self.api.badge_count()
+            self.session.seq_id = int(badge.get("seq_id") or 0)
+            self.session.snapshot_at_ms = int(badge.get("badge_count_at_ms") or 0)
             return
-        for t in inbox.get("inbox", {}).get("threads", []):
-            self._store_thread(Thread.parse(t))
+        self.session.seq_id = int(mailbox.get("iris_inactive_subscription_uq_seq_id") or 0)
+        self.session.snapshot_at_ms = int(mailbox.get("snapshot_at_ms") or 0)
+        self._ingest_mailbox(mailbox)
+
+    def _ingest_mailbox(self, mailbox: dict) -> tuple[list[Thread], Optional[str]]:
+        self._mailbox_id = mailbox.get("id") or self._mailbox_id
+        return self._ingest_threads(mailbox.get("threads_by_folder") or {})
+
+    def _ingest_threads(self, conn: dict) -> tuple[list[Thread], Optional[str]]:
+        threads = [Thread.parse_slide(e["node"]["as_ig_direct_thread"])
+                   for e in conn.get("edges") or []
+                   if (e.get("node") or {}).get("as_ig_direct_thread")]
+        for t in threads:
+            self._store_thread(t)
+        info = conn.get("page_info") or {}
+        return threads, (info.get("end_cursor") if info.get("has_next_page") else None)
 
     def _store_thread(self, thread: Thread) -> None:
         """Merge a parsed thread into the cache and index its 1:1
@@ -235,6 +250,8 @@ class Client:
                 thread.users = cached.users
             if not thread.v2_id:
                 thread.v2_id = cached.v2_id
+            if not thread.fbid:
+                thread.fbid = cached.fbid
             if not thread.messages:
                 thread.messages = cached.messages
         self._threads[thread.id] = thread
@@ -318,17 +335,14 @@ class Client:
         ref = str(ref)
         if ref.isdigit():
             return ref
-        user = await self.user_by_username(ref)
-        if not user.id:
-            raise NotFoundError(f"user @{ref} not found")
-        return user.id
+        return await self.api.user_id_for_username(ref.lstrip("@"))
 
     async def find_thread_for_user(self, user_ref: Union[str, int],
                                    scan_pages: int = 3) -> Optional[Thread]:
         """Locate the 1:1 thread with this user (by username or id) in the
         inbox, if any. Matching by username avoids the heavily rate-limited
         profile endpoint."""
-        ref = str(user_ref)
+        ref = str(user_ref).lstrip("@")
         cached_id = self._user_thread_index.get(ref) or \
             self._user_thread_index.get(ref.lower())
         if cached_id and cached_id in self._threads:
@@ -340,7 +354,7 @@ class Client:
                 if t.is_group:
                     continue
                 for u in t.users:
-                    if u.id == ref or u.username == ref:
+                    if u.id == ref or u.username.lower() == ref.lower():
                         return t
             if not cursor:
                 break
@@ -468,65 +482,98 @@ class Client:
 
     # -- reads ----------------------------------------------------------------
 
-    async def get_inbox(self, cursor: str | None = None, limit: int = 20) -> tuple[list[Thread], str | None]:
-        data = await self.api.inbox(cursor, limit)
-        threads = [Thread.parse(t) for t in data.get("inbox", {}).get("threads", [])]
-        for t in threads:
-            self._store_thread(t)
-        next_cursor = data.get("inbox", {}).get("oldest_cursor")
-        return threads, next_cursor
+    async def get_inbox(self, cursor: str | None = None,
+                        limit: int = 15) -> tuple[list[Thread], str | None]:
+        """One inbox page, newest first. Pass the returned cursor back to get
+        the next page; it is ``None`` on the last page. The first page size
+        is fixed by Instagram (15); ``limit`` applies to later pages."""
+        if cursor is None or not self._mailbox_id:
+            return self._ingest_mailbox(await self.api.inbox())
+        return self._ingest_threads(await self.api.inbox_page(self._mailbox_id, cursor, limit))
+
+    async def get_thread(self, thread_id: str, refresh: bool = False) -> Thread:
+        """The thread with this (long) ``thread_id``, from the cache or the
+        newest inbox page. Brand-new threads always appear on that page."""
+        if not refresh and thread_id in self._threads and self._threads[thread_id].v2_id:
+            return self._threads[thread_id]
+        await self.get_inbox()
+        thread = self._threads.get(thread_id)
+        if thread is None or not thread.v2_id:
+            raise NotFoundError(f"thread {thread_id} not in the recent inbox")
+        return thread
 
     async def get_thread_history(self, thread_id: str, cursor: str | None = None,
-                                 limit: int = 30) -> tuple[list[Message], str | None]:
-        data = await self.api.thread(thread_id, cursor, limit)
-        thread = Thread.parse(data.get("thread", {}))
-        self._store_thread(thread)
-        next_cursor = thread.raw.get("oldest_cursor")
-        return thread.messages, next_cursor
+                                 limit: int = 20) -> tuple[list[Message], str | None]:
+        """Messages newest first; pass the returned cursor for older ones
+        (``None`` when the start of the conversation is reached)."""
+        thread = await self.get_thread(thread_id)
+        if cursor is None:
+            raw = await self.api.thread(thread.v2_id, limit)
+            fresh = Thread.parse_slide(raw)
+            self._store_thread(fresh)
+            conn = raw.get("slide_messages") or {}
+            messages = fresh.messages
+        else:
+            conn = await self.api.thread_messages(thread.fbid, cursor, limit)
+            messages = [Message.parse_slide(e["node"], thread_id=thread.id,
+                                            viewer_id=thread.viewer_id or str(self.user_id or ""))
+                        for e in conn.get("edges") or [] if e.get("node")]
+        for m in messages:
+            m.client = self
+        info = conn.get("page_info") or {}
+        return messages, (info.get("end_cursor") if info.get("has_next_page") else None)
 
-    async def mark_seen(self, thread_id: str, item_id: str) -> None:
-        """Mark an item as seen — uses the web client's Relay mutation
-        (mark-thread-as-read), falling back to the app-style REST endpoint."""
-        # resolve the message_id (mid.$…) the mutation expects
-        message_id = ""
-        thread = self._threads.get(thread_id)
-        for m in (thread.messages if thread else []):
-            if m.item_id == item_id and m.message_id:
-                message_id = m.message_id
-                break
-        if message_id:
-            try:
-                await self.api.mark_thread_as_read(thread_id, message_id)
+    async def mark_seen(self, thread_id: str, item_id: str = "") -> None:
+        """Mark the thread read (up to ``item_id`` when its ``mid.$…``
+        message id is known, otherwise up to the newest message)."""
+        message_id = item_id if item_id.startswith("mid.") else ""
+        if not message_id:
+            thread = self._threads.get(thread_id)
+            for m in (thread.messages if thread else []):
+                if item_id and m.item_id == item_id and m.message_id.startswith("mid."):
+                    message_id = m.message_id
+                    break
+        if not message_id:
+            messages, _ = await self.get_thread_history(thread_id, limit=1)
+            if not messages:
                 return
-            except InstaDMError as e:
-                log.warning("graphql mark-read failed (%s); falling back to REST", e)
-        await self.api.mark_seen(thread_id, item_id)
+            message_id = messages[0].message_id
+        await self.api.mark_thread_as_read(thread_id, message_id)
 
     async def hide_thread(self, thread_id: str) -> None:
-        await self.api.hide_thread(thread_id)
+        raise InstaDMError("hide_thread is unavailable: Instagram removed the web "
+                           "REST route and the web client has no equivalent")
 
-    async def mute_thread(self, thread_id: str, mute: bool = True) -> None:
-        await self.api.mute_thread(thread_id, mute)
+    async def mute_thread(self, thread_id: str, mute: bool = True,
+                          seconds: int | None = None) -> None:
+        """Mute (forever, or for ``seconds``) or unmute a thread."""
+        thread = await self.get_thread(thread_id)
+        await self.api.mute_thread(thread.fbid, 0 if not mute else (seconds or -1))
 
     async def get_presence(self) -> dict:
-        return await self.api.get_presence()
+        raise InstaDMError("get_presence is unavailable: Instagram removed "
+                           "/direct_v2/get_presence/ from the web API")
 
     async def user_by_username(self, username: str) -> User:
-        data = await self.api.user_info_by_username(username)
-        return User.parse(data.get("data", {}).get("user", {}))
+        user_id = await self.api.user_id_for_username(username.lstrip("@"))
+        return await self.user_by_id(user_id)
+
+    async def user_by_id(self, user_id: str) -> User:
+        """Profile lookup; prefers the thread cache (no request)."""
+        for t in self._threads.values():
+            for u in t.users:
+                if u.id == str(user_id) and u.username:
+                    return u
+        return User.parse(await self.api.user_info(str(user_id)))
 
     async def thread_id_for_user(self, user_id: str) -> str:
-        """Find an existing 1:1 thread with ``user_id`` from the inbox."""
-        cached = self._user_thread_index.get(str(user_id))
-        if cached and cached in self._threads:
-            return cached
-        threads, cursor = await self.get_inbox(limit=50)
-        for t in threads:
-            if not t.is_group and any(u.id == str(user_id) for u in t.users):
-                return t.id
-        raise InstaDMError(
-            f"no existing thread with user {user_id} found in inbox; send the "
-            "first message from the Instagram app, or pass thread_id directly")
+        """Find an existing 1:1 thread with ``user_id`` (or username)."""
+        thread = await self.find_thread_for_user(user_id)
+        if thread is None:
+            raise InstaDMError(
+                f"no existing thread with user {user_id} found in inbox; send the "
+                "first message with send_message(), or pass thread_id directly")
+        return thread.id
 
     async def download(self, url: str, path: str | None = None) -> str:
         return await self.api.download(url, path)

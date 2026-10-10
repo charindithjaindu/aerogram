@@ -3,7 +3,7 @@ import json
 import pytest
 
 from aerogram.client import Client
-from aerogram.types import Thread, User
+from aerogram.types import Message, Thread, User
 
 
 def make_client(tmp_path, **kw):
@@ -78,38 +78,90 @@ async def test_seq_cursor_persisted_periodically(tmp_path):
     assert calls == [500]           # throttled: not again within 30s
 
 
+def slide_thread(tid="111", key="900", fbid="800", uid="42", username="alice"):
+    return {"thread_id": tid, "thread_key": key, "thread_fbid": fbid, "id": fbid,
+            "is_group": False, "viewer_id": "777",
+            "users": [{"id": uid, "username": username}],
+            "slide_messages": {"edges": [{"node": {
+                "id": "mid.$abc", "message_id": "mid.$abc", "timestamp_ms": "1700000000000",
+                "content_type": "TEXT", "offline_threading_id": "123",
+                "content": {"__typename": "SlideMessageText", "text_body": "hey"},
+                "sender": {"igid": uid}}}]}}
+
+
+def mailbox(*threads, has_next=True):
+    return {"id": "mbox", "iris_inactive_subscription_uq_seq_id": "18092",
+            "snapshot_at_ms": 1791594001146,
+            "threads_by_folder": {"edges": [{"node": {"as_ig_direct_thread": t}} for t in threads],
+                                  "page_info": {"end_cursor": "c1", "has_next_page": has_next}}}
+
+
 @pytest.mark.asyncio
-async def test_resnapshot_uses_badge_count_when_inbox_404s(tmp_path):
-    """The web REST inbox now 404s; the iris cursor must still be seeded."""
-    from aerogram.errors import NotFoundError
+async def test_resnapshot_seeds_cursor_and_cache_from_graphql_inbox(tmp_path):
     c = make_client(tmp_path)
 
-    async def badge_count():
-        return {"seq_id": "18092", "badge_count_at_ms": 1791594001146}
+    async def inbox():
+        return mailbox(slide_thread())
 
-    async def inbox(*a, **kw):
-        raise NotFoundError("Not found: /direct_v2/inbox/")
-
-    c.api.badge_count = badge_count
     c.api.inbox = inbox
     await c._resnapshot_cursor()
     assert c.session.seq_id == 18092
     assert c.session.snapshot_at_ms == 1791594001146
+    t = c._threads["111"]
+    assert (t.v2_id, t.fbid) == ("900", "800")
+    assert c._user_thread_index["alice"] == "111"
+    assert c._mailbox_id == "mbox"
 
 
 @pytest.mark.asyncio
-async def test_resnapshot_still_warms_cache_when_inbox_works(tmp_path):
+async def test_resnapshot_falls_back_to_badge_count(tmp_path):
+    from aerogram.errors import InstaDMError
     c = make_client(tmp_path)
 
+    async def inbox():
+        raise InstaDMError("graphql down")
+
     async def badge_count():
-        return {"seq_id": 5, "badge_count_at_ms": 10}
+        return {"seq_id": "5", "badge_count_at_ms": 10}
 
-    async def inbox(*a, **kw):
-        return {"inbox": {"threads": [{"thread_id": "111", "users": [
-            {"pk": "42", "username": "alice"}]}]}}
-
-    c.api.badge_count = badge_count
     c.api.inbox = inbox
+    c.api.badge_count = badge_count
     await c._resnapshot_cursor()
-    assert c.session.seq_id == 5
-    assert c._user_thread_index["alice"] == "111"
+    assert (c.session.seq_id, c.session.snapshot_at_ms) == (5, 10)
+
+
+@pytest.mark.asyncio
+async def test_get_inbox_paginates_with_mailbox_id(tmp_path):
+    c = make_client(tmp_path)
+    calls = []
+
+    async def inbox():
+        return mailbox(slide_thread())
+
+    async def inbox_page(mailbox_id, cursor, count):
+        calls.append((mailbox_id, cursor, count))
+        return {"edges": [{"node": {"as_ig_direct_thread": slide_thread(tid="222", uid="43", username="bob")}}],
+                "page_info": {"end_cursor": "c2", "has_next_page": False}}
+
+    c.api.inbox = inbox
+    c.api.inbox_page = inbox_page
+    threads, cursor = await c.get_inbox()
+    assert [t.id for t in threads] == ["111"] and cursor == "c1"
+    threads, cursor = await c.get_inbox(cursor)
+    assert [t.id for t in threads] == ["222"] and cursor is None
+    assert calls == [("mbox", "c1", 15)]
+    assert (await c.find_thread_for_user("@Bob")).id == "222"
+
+
+def test_message_parse_slide():
+    t = Thread.parse_slide(slide_thread())
+    m = t.messages[0]
+    assert (m.thread_id, m.message_id, m.user_id, m.text) == ("111", "mid.$abc", "42", "hey")
+    assert m.timestamp_us == 1700000000000 * 1000
+    assert not m.is_sent_by_viewer and m.media is None
+    img = Message.parse_slide({"id": "mid.$x", "sender": {"igid": "777"}, "content": {
+        "__typename": "SlideMessageImageContent",
+        "attachments": [{"attachment_fbid": "5", "attachment_cdn_url": "https://cdn/x.jpg",
+                         "preview_cdn_url": "https://cdn/p.jpg"}]}}, viewer_id="777")
+    assert img.is_sent_by_viewer
+    assert (img.media.media_type, img.media.url, img.item_type) == ("photo", "https://cdn/x.jpg", "photo")

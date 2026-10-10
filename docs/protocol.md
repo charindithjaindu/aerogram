@@ -199,16 +199,42 @@ Media send (`IGDirectMediaSendMutation`, doc `25766288509716264`):
 
 Mark-thread-as-read (`useIGDMarkThreadAsReadMutation`, doc
 `27399783383056109`): `{"data": {"item_id": "", "message_id": "mid.$…"},
-"metadata": {"ig_thread_igid": "<thread_v2_id>"}}`.
+"metadata": {"ig_thread_igid": "<long thread_id>"}}` — unlike the send
+mutation, the web client passes the long `thread_id` here.
+
+### Reads (GraphQL queries)
+
+The web client no longer reads DMs over REST; everything goes through
+persisted queries on `/api/graphql` (same form/tokens as the mutations).
+Relay provider variables (`__relay_internal__pv__…`) must be sent too —
+see `HttpApi` for the exact sets.
+
+| query (doc id) | variables | result |
+|---|---|---|
+| `PolarisDirectInboxQuery` (`27909866362025854`) | `device_id_for_iris_subscription` | `data.get_slide_mailbox_for_iris_subscription`: first 15 threads, mailbox `id`, and `iris_inactive_subscription_uq_seq_id` (the iris `seq_id`) |
+| `IGDThreadListOffMsysPaginationQuery` (`28774058922187457`) | `id` (mailbox id), `cursor`, `count`, `folder: "INBOX"` (required) | `data.fetch__SlideMailbox.threads_by_folder` |
+| `IGDThreadDetailQuery` (`29432273173041378`) | `thread_fbid` = the thread's **`thread_key`** | `data.get_slide_thread_nullable.as_ig_direct_thread` with newest messages |
+| `IGDMessageListOffMsysQuery` (`29380270148264352`) | `id` = `thread_fbid`, `after` = `slide_messages.page_info.end_cursor`, `first` | `data.fetch__SlideThread.as_ig_direct_thread.slide_messages` (older) |
+| `PolarisProfilePageContentQuery` (`28036671149327607`) | `id` (user pk) | `data.user` |
+| `IGDInboxInfoMuteToggleOffMsysMutation` (`26360506043651125`) | `thread_fbid`, `mute_seconds` (-1 forever, 0 unmute), `offline_threading_id` | mute state |
+
+A thread carries three ids: `thread_id` (long, `34028236…` — iris paths and
+MQTT sends), `thread_key` (short — `ig_thread_igid` in sends, thread
+detail) and `thread_fbid` (mute, message-list pagination). Messages are
+`slide_messages` nodes: `message_id` `mid.$…`, `sender.igid` = user pk,
+`text_body`, `timestamp_ms`, `content.__typename` for media.
+
+Username → user id has no cheap query; the web client resolves it from the
+profile page document (`"profile_id":"<pk>"`), which aerogram mirrors.
 
 ## Layer 3 — REST
 
-Plain cookie-authenticated GETs on `https://www.instagram.com/api/v1/…`
-(`direct_v2/inbox`, `direct_v2/threads/<tid>`, `direct_v2/get_presence`,
-`users/web_profile_info`) with `X-IG-App-ID: 936619743392459`,
-`X-Requested-With: XMLHttpRequest` and the `X-CSRFToken` header for POSTs.
-The legacy app-API POST endpoints (`direct_v2/threads/broadcast/…`) are
-**gone** for web sessions (404) — don't bother.
+Only `GET /api/v1/direct_v2/get_badge_count/` (iris `seq_id` fallback) is
+still used. The web REST DM routes — `direct_v2/inbox`,
+`direct_v2/threads/<tid>`, `…/seen/`, `…/hide/`, `…/mute/`,
+`direct_v2/get_presence`, `direct_v2/threads/broadcast/…` — now return the
+HTML 404 page, and `users/web_profile_info` / `users/<id>/info` are heavily
+429'd. Hide and presence have no web replacement.
 
 ## Keeping this honest
 

@@ -131,6 +131,33 @@ class Media:
                        thumbnail_url=images[0].get("url") if images else "", raw=item)
         return None
 
+    @classmethod
+    def parse_slide(cls, content: dict) -> Optional["Media"]:
+        """Media from a GraphQL ``slide_messages`` node's ``content``."""
+        typename = content.get("__typename") or ""
+        if "xma" in content:
+            xma = content.get("xma") or {}
+            return cls(media_type=XMA_SHARE, id=str(xma.get("target_id") or ""),
+                       url=xma.get("target_url") or "",
+                       thumbnail_url=(xma.get("preview_image") or {}).get("url") or "",
+                       raw=content)
+        att = content.get("attachment") or (content.get("attachments") or [None])[0] \
+            or content.get("animated_media")
+        if not isinstance(att, dict):
+            return None
+        kind = typename.lower()
+        if "video" in kind:
+            media_type = "video"
+        elif "audio" in kind or "voice" in kind:
+            media_type = VOICE_MEDIA
+        elif "animated" in kind:
+            media_type = ANIMATED_MEDIA
+        else:
+            media_type = "photo"
+        return cls(media_type=media_type, id=str(att.get("attachment_fbid") or att.get("id") or ""),
+                   url=att.get("attachment_cdn_url") or att.get("url") or "",
+                   thumbnail_url=att.get("preview_cdn_url") or "", raw=content)
+
 
 @dataclass
 class Message:
@@ -177,6 +204,37 @@ class Message:
         )
         return msg
 
+    @classmethod
+    def parse_slide(cls, node: dict, thread_id: str = "", viewer_id: str = "") -> "Message":
+        """Parse a GraphQL ``slide_messages`` edge node (the web client's
+        current message shape)."""
+        content = node.get("content") or {}
+        sender = node.get("sender") or {}
+        user_id = str(sender.get("igid") or (sender.get("user_dict") or {}).get("id") or "")
+        media = Media.parse_slide(content)
+        text = node.get("text_body") or content.get("text_body") or content.get("xma_text_body") or ""
+        ts_ms = _int(node.get("timestamp_ms"))
+        mid = str(node.get("message_id") or node.get("id") or "")
+        if media is not None:
+            item_type = media.media_type
+        elif content.get("__typename") == "SlideMessageAdminText":
+            item_type = PLACEHOLDER
+        else:
+            item_type = TEXT
+        return cls(
+            thread_id=thread_id,
+            item_id=mid,
+            message_id=mid,
+            user_id=user_id,
+            timestamp_us=ts_ms * 1000 if ts_ms else None,
+            item_type=item_type,
+            text=text,
+            client_context=str(node.get("offline_threading_id") or ""),
+            is_sent_by_viewer=bool(viewer_id) and user_id == str(viewer_id),
+            media=media,
+            raw=node,
+        )
+
     # -- conveniences (need a live client backref) ---------------------------
 
     @property
@@ -203,7 +261,8 @@ class Thread:
     """A DM conversation."""
 
     id: str = ""
-    v2_id: str = ""
+    v2_id: str = ""        # thread_key: short id used by send mutations / thread detail
+    fbid: str = ""         # thread_fbid: used by mute and message-list pagination
     users: list[User] = field(default_factory=list)
     is_group: bool = False
     title: str = ""
@@ -230,6 +289,28 @@ class Thread:
         )
         t.messages = [Message.parse(i, thread_id=t.id)
                       for i in (raw.get("items") or [])]
+        return t
+
+    @classmethod
+    def parse_slide(cls, raw: dict) -> "Thread":
+        """Parse a GraphQL ``as_ig_direct_thread`` object."""
+        viewer_id = str(raw.get("viewer_id") or "")
+        t = cls(
+            id=str(raw.get("thread_id") or ""),
+            v2_id=str(raw.get("thread_key") or ""),
+            fbid=str(raw.get("thread_fbid") or raw.get("id") or ""),
+            users=[User.parse(u) for u in (raw.get("users") or [])],
+            is_group=bool(raw.get("is_group")),
+            title=raw.get("thread_title") or "",
+            muted=bool(raw.get("is_muted")),
+            marked_unread=bool(raw.get("marked_as_unread")),
+            viewer_id=viewer_id,
+            last_activity_at=_int(raw.get("last_activity_timestamp_ms")),
+            raw=raw,
+        )
+        edges = (raw.get("slide_messages") or {}).get("edges") or []
+        t.messages = [Message.parse_slide(e["node"], thread_id=t.id, viewer_id=viewer_id)
+                      for e in edges if e.get("node")]
         return t
 
     def other_user(self, viewer_id: str = "") -> Optional[User]:
