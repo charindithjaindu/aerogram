@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 - Reliable reels/posts and faster replies
 
 - **Fixed: a shared reel or post could reach handlers as an empty
   `photo`.** Instagram pushes new messages on the MQTT socket again, about

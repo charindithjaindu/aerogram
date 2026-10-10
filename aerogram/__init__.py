@@ -21,7 +21,7 @@ from .filters import Chat, FromUser, Regex, create, filters
 from .session import Session
 from .types import Media, Message, Reaction, Thread, User
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "Client", "Session", "Message", "Thread", "User", "Media", "Reaction",
