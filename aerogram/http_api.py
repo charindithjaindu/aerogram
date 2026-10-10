@@ -81,9 +81,10 @@ class HttpApi:
                 await asyncio.sleep(KEEP_WARM_INTERVAL - idle)
                 continue
             try:
-                await self._client.get("https://www.instagram.com/robots.txt",
-                                       headers={"User-Agent": self._ua})
-            except httpx.HTTPError as e:
+                resp = await self._client.get("https://www.instagram.com/robots.txt",
+                                              headers=self._headers())
+                self._absorb_cookies(resp)
+            except Exception as e:  # never let the loop die
                 log.debug("keep-warm request failed: %s", e)
                 self._last_request = time.monotonic()
 

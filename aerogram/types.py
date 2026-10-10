@@ -271,7 +271,9 @@ class Message:
         # the GraphQL send is the web client's own path: ~0.2s faster to
         # arrive than the MQTT send and independent of the socket's state
         if self.thread_fbid:
-            return await self.client.send_text_to_fbid(self.thread_fbid, text)
+            sent = await self.client.send_text_to_fbid(self.thread_fbid, text)
+            sent.thread_id = sent.thread_id or self.thread_id
+            return sent
         return await self.client.send_text(self.thread_id, text)
 
     async def mark_seen(self) -> None:

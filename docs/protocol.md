@@ -91,6 +91,11 @@ therefore dispatches:
 
 Duplicates are dropped by `message_id` / threading id.
 
+Because the two channels share one cursor, a message that only reached iris
+while lightspeed was reconnecting is not replayed when lightspeed resumes;
+it is dispatched from the held iris copy (possibly partial) after the
+grace delay. This is rare, and better than losing the message.
+
 ## Layer 1 - MQTT 3.1 over WebSocket (sends; legacy receive)
 
 The web client connects to:

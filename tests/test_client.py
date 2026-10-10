@@ -275,7 +275,9 @@ async def test_mqtt_text_dispatches_at_once_with_thread_fbid(tmp_path):
 async def test_mqtt_media_waits_for_the_complete_lightspeed_copy(tmp_path):
     c = make_client(tmp_path)
     c.MEDIA_FALLBACK_DELAY = 0.05
-    c._store_thread(full_thread(tid="111"))
+    t = full_thread(tid="111")
+    t.fbid = "fb111"
+    c._store_thread(t)
     c._lightspeed = _UpStream()
     got = _collect(c)
     await c._handle_delta(_iris_delta({"item_type": "media_share", "user_id": "42",
@@ -351,13 +353,14 @@ async def test_reply_text_prefers_graphql_send(tmp_path):
 
     async def by_fbid(fbid, text):
         sent.append(("gql", fbid))
+        return Message(thread_fbid=fbid)
 
     async def by_mqtt(tid, text):
         sent.append(("mqtt", tid))
     c.send_text_to_fbid, c.send_text = by_fbid, by_mqtt
     m = Message(thread_id="111", thread_fbid="fb1")
     m.client = c
-    await m.reply_text("hi")
+    assert (await m.reply_text("hi")).thread_id == "111"
     m2 = Message(thread_id="222")
     m2.client = c
     await m2.reply_text("hi")
