@@ -1,4 +1,4 @@
-"""instaDM — a Pyrogram-style library for Instagram direct messages.
+"""aerogram — automate Instagram direct messages from Python.
 
 Quickstart::
 

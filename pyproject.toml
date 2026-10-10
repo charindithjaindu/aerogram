@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aerogram"
 version = "0.1.1"
-description = "Pyrogram-style async library for Instagram direct messages (realtime MQTT + cookie auth)"
+description = "Automate Instagram DMs from Python: realtime receive, send text/media, share reels and posts (cookie auth)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

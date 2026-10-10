@@ -1,49 +1,48 @@
 # ✈️ Aerogram
 
-**A Pyrogram-style async library for Instagram direct messages.**
+**Automate your Instagram DMs from Python.**
 
 [![CI](https://github.com/charindithjaindu/aerogram/actions/workflows/ci.yml/badge.svg)](https://github.com/charindithjaindu/aerogram/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Send, receive, react to and download Instagram DMs from Python — with the same
-cookie-based session your browser already has, realtime message delivery over
-the same transport instagram.com uses, and an API shaped like
-[Pyrogram](https://github.com/pyrogram/pyrogram).
-
-> An *aerogram* is an air-mail letter: a lightweight message sent across the
-> world. That's all a DM is.
+Read, reply to, and send Instagram direct messages — text, photos, videos,
+voice notes, reels and posts — in realtime, using the session you're
+already logged into in your browser. No password, no phone emulation.
 
 ```python
 from aerogram import Client, filters
 
 app = Client("my_session", cookies_file="session/cookies.txt")
 
-@app.on_message(filters.text & ~filters.self)
+@app.on_message(filters.text & ~filters.self)     # text DMs, not my own
 async def echo(client, message):
     await message.reply_text(message.text)
 
 app.run()
 ```
 
-## ✨ Features
+## ✨ What you can do
 
-- **Realtime receive** — messages arrive in milliseconds over the web client's
-  lightspeed gateway stream, with automatic reconnect and **gap-free
-  resume** (the iris `seq_id` cursor is replayed on every reconnect).
-- **Send by username** — `send_message("friend", "hi!")` resolves the thread
-  for you and even starts brand-new conversations.
-- **Photos, videos, voice notes** — `send_photo` / `send_video` /
-  `send_voice` (or `send_media`) upload and send; incoming media arrives
-  parsed with download URLs (`download_media()`).
-- **Reactions, typing indicators, mark-as-read, likes** — all supported.
-- **Pyrogram-style handlers & filters** — `@app.on_message`,
-  `filters.text & ~filters.self`, `filters.photo | filters.video`, custom
-  filters, handler groups.
-- **Reliable by design** — retry with backoff on 5xx, `Retry-After` handling
-  for 429s, idempotent message sends, cookie-rotation tracking, typed errors.
-- **No app emulation, no password** — authenticate by exporting your browser
-  cookies once.
+- **Get every DM the moment it arrives** — text, ❤ likes, links, photos,
+  videos, voice notes, GIFs and shared reels/posts, each parsed into a
+  `Message` with download links.
+- **Reply and send** — text to any username (new conversations included),
+  photos, videos and voice notes, and **share reels and posts** as real
+  cards.
+- **Reactions, typing indicators, mark-as-read, mute.**
+- **Read your inbox** — paginated thread list, full message history, user
+  lookups by username or id.
+- **Download media** — photos, videos and voice notes to disk.
+- **Built for bots that stay up** — automatic reconnect without missing
+  messages, rate-limit handling, typed errors.
+
+Bots are a few lines of handlers and filters (`filters.photo`,
+`filters.private & ~filters.self`, …) — see the [examples](#-examples).
+
+Not supported: message requests (DMs from people who don't follow you)
+aren't delivered in realtime until accepted, and end-to-end encrypted chats
+aren't reachable.
 
 > ⚠️ **Unofficial.** Aerogram talks to private Instagram endpoints. Automating
 > your account violates Instagram's Terms of Service — use it for personal
@@ -108,8 +107,13 @@ That's it — the first run fetches your inbox, stores the realtime cursor in
 # send by username (creates the conversation if needed)
 await app.send_message("friend", "dinner at 8?")
 
-# send a photo (upload + slide mutation)
+# media: photos, videos, voice notes
 await app.send_photo("cats.jpg", to="friend")
+await app.send_video("clip.mp4", to="friend")
+await app.send_voice("note.m4a", to="friend")
+
+# share a reel or post (e.g. one somebody shared with you)
+await app.share_media(thread_id, message.media.id, is_clip=True)
 
 # react, type, mark read
 await app.send_reaction(thread_id, message.item_id, "🔥")
@@ -124,13 +128,14 @@ messages, older = await app.get_thread_history(thread_id, limit=30)
 @app.on_message_delete
 async def unsent(client, message): ...
 
-@app.on_raw_delta                      # every iris patch, unfiltered
+@app.on_raw_delta                      # every raw realtime update
 async def raw(client, delta): ...
 ```
 
-Incoming messages are rich objects: `message.text`, `message.media.url`,
-`message.user_id`, `message.thread_id`, `message.is_sent_by_viewer`,
-`message.reactions`, `message.raw` (the original payload).
+Incoming messages carry `message.text`, `message.media` (`media_type`:
+`photo`, `video`, `voice_media`, `clip` for reels, `media_share` for posts…;
+`url`, `id`), `message.user_id`, `message.thread_id`,
+`message.is_sent_by_viewer` and `message.raw` (the original payload).
 
 ## 🧪 Examples
 
