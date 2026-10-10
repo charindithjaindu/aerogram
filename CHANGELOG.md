@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — Instagram's new web DM transport
 
 Instagram removed the web REST DM API (`/direct_v2/inbox/`, `threads/…`,
 `seen`/`hide`/`mute`, `get_presence`, `broadcast/…` now return the HTML 404
