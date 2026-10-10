@@ -49,6 +49,10 @@ the new *Reads* section of `docs/protocol.md`.
 - Shared reels/posts now parse as `media_type` `"clip"` / `"media_share"`
   with `media.id` = the media id, so `share_media()` can re-share them
   (verified live for both; other cards stay `"xma_share"`).
+- `download_media()` / `download()` accept a folder (existing, or a path
+  ending in `/`) and keep the CDN file name inside it, as documented.
+- Examples: `echo_bot.py` now echoes every message type (media re-upload,
+  reel/post re-share); new `forward_to_telegram.py` and `send_media.py`.
 - Message requests are not delivered in realtime (Instagram pushes nothing
   until a request is accepted) — documented, not handled.
 - **Fixed: `send_message()` to an existing thread** now passes the thread's

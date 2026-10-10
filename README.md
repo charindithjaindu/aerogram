@@ -132,6 +132,16 @@ Incoming messages are rich objects: `message.text`, `message.media.url`,
 `message.user_id`, `message.thread_id`, `message.is_sent_by_viewer`,
 `message.reactions`, `message.raw` (the original payload).
 
+## 🧪 Examples
+
+| file | what it does |
+|------|--------------|
+| [`examples/echo_bot.py`](examples/echo_bot.py) | echoes every DM back: text, photos, videos, voice notes, and re-shares reels/posts |
+| [`examples/forward_to_telegram.py`](examples/forward_to_telegram.py) | forwards every DM to a Telegram chat and greets the sender |
+| [`examples/send_media.py`](examples/send_media.py) | sends a photo, video, voice note and a shared reel to a user |
+| [`examples/send_message.py`](examples/send_message.py) | typing indicator + send into an existing thread |
+| [`examples/history.py`](examples/history.py) | dumps the inbox and one thread's history |
+
 ## 🏗️ How it works
 
 Aerogram talks to the same infrastructure the instagram.com web app does:

@@ -279,10 +279,15 @@ class HttpApi:
     # -- misc -----------------------------------------------------------------
 
     async def download(self, url: str, path: str | None = None) -> str:
+        import os
+        from urllib.parse import urlparse
+        name = urlparse(url).path.split("/")[-1].split("?")[0] or "media.bin"
         if path is None:
-            from urllib.parse import urlparse
-            name = urlparse(url).path.split("/")[-1].split("?")[0] or "media.bin"
             path = name
+        elif path.endswith(("/", os.sep)) or os.path.isdir(path):
+            # a folder: keep the CDN file name inside it
+            os.makedirs(path, exist_ok=True)
+            path = os.path.join(path, name)
         # stream to disk: DM videos can be large enough that buffering the
         # whole body would spike memory
         # CDN media URLs (videos especially) 302 to the serving host

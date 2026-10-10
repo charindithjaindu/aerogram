@@ -210,3 +210,15 @@ def test_media_parse_slide_shared_reel_and_post():
     assert (reel.media_type, reel.id) == ("clip", "123")
     assert (post.media_type, post.id, post.thumbnail_url) == ("media_share", "123", "https://cdn/p.jpg")
     assert other.media_type == "xma_share"
+
+
+@pytest.mark.asyncio
+async def test_download_into_folder_keeps_cdn_name(tmp_path):
+    import httpx
+    c = make_client(tmp_path)
+    c.api._client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, content=b"img")))
+    folder = str(tmp_path / "downloads") + "/"
+    path = await c.download("https://cdn.example/v/pic.jpg?x=1", folder)
+    assert path == str(tmp_path / "downloads" / "pic.jpg")
+    assert open(path, "rb").read() == b"img"
