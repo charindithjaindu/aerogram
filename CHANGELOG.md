@@ -32,6 +32,22 @@ the new *Reads* section of `docs/protocol.md`.
   already used mercury uploads) and the REST `mark_seen`/`hide_thread`/
   `get_presence`/`user_info_by_*` wrappers.
 - `X-ASBD-ID` updated to the web client's current `359341`.
+- **Fixed: no incoming messages.** Instagram stopped pushing DMs over the
+  edge-chat iris subscription; they now arrive on the lightspeed DGW
+  stream, which aerogram connects to alongside MQTT (new
+  `aerogram/lightspeed.py`). `on_message`, `on_message_delete` and
+  `on_raw_delta` (now also dict slide deltas) are fed from it.
+- New: `send_media()`, `send_video()`, `send_voice()`; `send_photo()` is
+  a wrapper. Media sends now target `thread_fbid`, like the web client.
+- New: `Message.thread_fbid`, `Client.send_text_to_fbid()`,
+  `Client.refresh_media()`; `reply_text()` works for threads outside the
+  recent inbox; `download_media()` follows CDN redirects and waits for
+  voice-note urls that are still processing; videos/voice notes from
+  GraphQL/lightspeed now parse into `Media`.
+- Realtime sends wait up to 10s for the MQTT connection instead of failing
+  immediately after `start()`.
+- Message requests are not delivered in realtime (Instagram pushes nothing
+  until a request is accepted) — documented, not handled.
 - **Fixed: `send_message()` to an existing thread** now passes the thread's
   `thread_fbid` as `ig_thread_igid` (what the web composer sends);
   `HttpApi.send_text_message(thread_v2_id=)` is now `thread_fbid=`.

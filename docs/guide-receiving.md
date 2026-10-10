@@ -1,7 +1,15 @@
 # Receiving messages
 
-Aerogram connects to Instagram's realtime transport on `start()` and feeds
-every incoming update through your handlers.
+Aerogram connects to Instagram's realtime transports on `start()` and feeds
+every incoming update through your handlers. Incoming messages arrive on
+the web client's *lightspeed* stream (see [protocol.md](protocol.md)).
+
+> **Message requests are not delivered in realtime.** DMs from accounts
+> that don't follow you land in *Requests*, and Instagram pushes nothing
+> for them until the request is accepted (replying from the Instagram app,
+> or with `send_text()` to that thread, accepts it). They're visible
+> through the GraphQL `PolarisDirectMessageRequestQuery`
+> (`system_folder: PENDING`), which aerogram doesn't poll.
 
 ## The message handler
 
@@ -64,20 +72,25 @@ async def thread_change(client, thread): ...
 @app.on_unseen_count                # the inbox badge number changed
 async def badge(client, data): ...
 
-@app.on_raw_delta                   # every iris patch operation
+@app.on_raw_delta                   # every raw realtime delta
 async def raw(client, delta):
-    print(delta.op, delta.path)
+    print(delta)
 ```
 
-`on_raw_delta` is the escape hatch: iris operations arrive as
-`delta.op` (`add`/`replace`/`remove`/…), `delta.path`
-(`/direct_v2/threads/<tid>/items/<iid>`) and `delta.value`.
+`on_raw_delta` is the escape hatch. Lightspeed deltas arrive as dicts with
+a `__typename` (`SlideUQPPNewMessage`, `SlideUQPPCreateReaction`,
+`SlideUQPPMarkRead`, `SlideUQPPDeleteMessage`, …); legacy iris deltas, if
+Instagram sends any, arrive as `Delta` objects (`.op`, `.path`, `.value`).
+
+Messages from lightspeed carry both `message.thread_id` (long id, when the
+thread is in the recent inbox) and `message.thread_fbid`;
+`message.reply_text()` works with either.
 
 ## Reliability
 
 - The connection auto-reconnects with exponential backoff + jitter.
-- On every reconnect Aerogram re-subscribes and re-syncs iris from the last
-  persisted `seq_id`, so **no messages are lost** while you were offline.
+- On every reconnect Aerogram re-syncs from the last seen `seq_id`, so **no
+  messages are lost** during a dropped connection.
 - The cursor lives in `<name>.session.json`; deleting that file makes the
   next start resnapshot from the present (old messages are skipped).
 - Handlers run isolated: an exception in one handler never breaks the

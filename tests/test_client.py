@@ -184,3 +184,13 @@ async def test_send_message_to_existing_thread_uses_thread_fbid(tmp_path):
     msg = await c.send_message("alice", "hi")
     assert sent == {"thread_fbid": "800", "recipient_igids": None}
     assert (msg.thread_id, msg.message_id) == ("111", "mid.$new")
+
+
+def test_media_parse_slide_video_and_voice():
+    from aerogram.types import Media
+    v = Media.parse_slide({"__typename": "SlideMessageVideosContent", "videos": [
+        {"attachment_fbid": "1", "attachment_cdn_url": "https://cdn/v.mp4", "preview_cdn_url": "https://cdn/p.jpg"}]})
+    assert (v.media_type, v.url, v.thumbnail_url) == ("video", "https://cdn/v.mp4", "https://cdn/p.jpg")
+    a = Media.parse_slide({"__typename": "SlideMessageAudiosContent", "audio_attachments": [
+        {"attachment_fbid": "2", "attachment_cdn_url": "https://cdn/a.mp4", "playable_duration_ms": 1396}]})
+    assert (a.media_type, a.url, a.duration_seconds) == ("voice_media", "https://cdn/a.mp4", 1.396)

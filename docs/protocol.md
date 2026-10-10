@@ -18,7 +18,50 @@ All tokens/ids below are placeholders, obviously.
    (`scripts/probe_iris.py`), iterate until the broker accepts and messages
    flow.
 
-## Layer 1 — realtime: MQTT 3.1 over WebSocket
+## Layer 0 — receiving: the lightspeed DGW stream
+
+As of late 2026 the edge-chat MQTT iris subscription below still connects
+and accepts sends, but **pushes no DMs** to web sessions (`/ig_message_sync`
+stays silent while the inbox `seq_id` advances). instagram.com receives on
+
+```
+wss://gateway.instagram.com/ws/lightspeed?x-dgw-appid=936619743392459
+  &x-dgw-appversion=0&x-dgw-authtype=6:0&x-dgw-version=5
+  &x-dgw-uuid=<viewer uuid from rur cookie>&x-dgw-tier=prod
+  &x-dgw-deviceid=<fresh uuid4 per socket>
+```
+
+with the session cookies, `Origin: https://www.instagram.com`.
+
+**DGW framing** (binary WS messages, several frames may share one):
+`type:u8 | stream:u16le | length:u24le | payload`; Ping (9), Pong (10)
+and Empty (2) are a single byte. Types: EstabStream 15, Data 13, Ack 12,
+EndOfData 14. A Data payload starts with `ack:u16le` — bit 15 set means
+"ack me", answered by an Ack frame whose payload is the 15-bit id.
+
+**Session:** send EstabStream with payload `{}` plus one Data frame:
+
+```json
+{"app_id": "936619743392459", "device_id": "<same uuid>", "request_id": 1, "type": 2,
+ "payload": "{\"database\":223,\"epoch_id\":0,\"failure_count\":0,
+   \"last_applied_cursor\":\"{\\\"seq_id\\\":<iris seq_id>}\",
+   \"sync_params\":\"{\\\"user_agent\\\":\\\"WMI Web\\\",\\\"snapshot_at_ms\\\":<ms>,
+     \\\"prevalidated_graphql_doc_id\\\":\\\"28859056920377149\\\"}\",\"version\":-3}"}
+```
+
+The server answers EstabStream `{"code":200}`, acks the cursor, then
+pushes Data frames `{"request_id": null, "payload": "<base64 protobuf>"}`.
+The protobuf wraps a JSON string
+`[{"data":{"slide_delta_processor":[…]}}]` (IGDSlideDeltaProcessorQuery);
+each delta has a `__typename` (`SlideUQPPNewMessage`, …), `uq_seq_id` and
+`thread_fbid`, and new-message deltas carry the same `slide_messages` node
+shape as the GraphQL reads. The `seq_id`/`snapshot_at_ms` come from
+`PolarisDirectInboxQuery` (`iris_inactive_subscription_uq_seq_id`).
+
+**Message requests** (threads in `system_folder: PENDING`) get no deltas
+at all until accepted; replying to the thread accepts it.
+
+## Layer 1 — MQTT 3.1 over WebSocket (sends; legacy receive)
 
 The web client connects to:
 

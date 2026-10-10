@@ -285,7 +285,9 @@ class HttpApi:
             path = name
         # stream to disk: DM videos can be large enough that buffering the
         # whole body would spike memory
-        async with self._client.stream("GET", url, headers={"User-Agent": self._ua}) as resp:
+        # CDN media URLs (videos especially) 302 to the serving host
+        async with self._client.stream("GET", url, headers={"User-Agent": self._ua},
+                                       follow_redirects=True) as resp:
             resp.raise_for_status()
             with open(path, "wb") as f:
                 async for chunk in resp.aiter_bytes(1 << 16):
@@ -456,14 +458,17 @@ class HttpApi:
         return body[len("for (;;);"):] if body.startswith("for (;;);") else body
 
     async def upload_mercury(self, data: bytes, filename: str = "photo.jpg",
-                             mime_type: str = "image/jpeg") -> str:
-        """Upload a DM attachment through the web client's mercury upload
-        service; returns the ``attachment_fbid`` the slide-message mutations
-        expect. (The rupload_igphoto flow does NOT work for web DMs.)
+                             mime_type: str = "image/jpeg", voice_clip: bool = False) -> str:
+        """Upload a DM attachment (image, video or audio) through the web
+        client's mercury upload service; returns the ``attachment_fbid`` the
+        media-send mutation expects. ``voice_clip`` marks audio as a voice
+        note (as the web voice recorder does).
         """
         tok = await self._page_tokens()
         form = self._auth_form(tok, self._req_counter.next())
         form["upload_id"] = str(uuid.uuid4())
+        if voice_clip:
+            form["voice_clip"] = "true"
         headers = self._web_headers(tok, "FileMercuryUploadService")
         resp = await self._client.post(
             "https://www.instagram.com/ajax/mercury/upload.php",
@@ -509,7 +514,8 @@ class HttpApi:
     async def send_media_message(self, thread_id: str, attachment_fbid: str,
                                  reply_to_message_id: str | None = None) -> dict:
         """Send an uploaded attachment (see ``upload_mercury``) into a thread
-        via the web client's slide mutation. Requires the long ``thread_id``."""
+        via the web client's slide mutation. ``thread_id`` is the thread's
+        ``thread_fbid`` (what the web client passes)."""
         variables = {
             "attachment_fbid": attachment_fbid,
             "reply_to_message_id": reply_to_message_id,

@@ -141,8 +141,10 @@ class Media:
                        url=xma.get("target_url") or "",
                        thumbnail_url=(xma.get("preview_image") or {}).get("url") or "",
                        raw=content)
-        att = content.get("attachment") or (content.get("attachments") or [None])[0] \
-            or content.get("animated_media")
+        att = content.get("attachment") or content.get("animated_media")
+        for key in ("attachments", "videos", "audio_attachments"):
+            if not att and content.get(key):
+                att = content[key][0]
         if not isinstance(att, dict):
             return None
         kind = typename.lower()
@@ -156,7 +158,9 @@ class Media:
             media_type = "photo"
         return cls(media_type=media_type, id=str(att.get("attachment_fbid") or att.get("id") or ""),
                    url=att.get("attachment_cdn_url") or att.get("url") or "",
-                   thumbnail_url=att.get("preview_cdn_url") or "", raw=content)
+                   thumbnail_url=att.get("preview_cdn_url") or "",
+                   duration_seconds=float(att.get("playable_duration_ms") or 0) / 1000,
+                   raw=content)
 
 
 @dataclass
@@ -257,6 +261,10 @@ class Message:
         await self.client.send_reaction(self.thread_id, self.item_id, emoji)
 
     async def download_media(self, path: str | None = None) -> str:
+        if self.media is not None and not self.media.url:
+            # realtime pushes can precede media processing (voice notes
+            # arrive without a CDN url); the thread history has it shortly after
+            await self.client.refresh_media(self)
         if not self.media or not self.media.url:
             raise ValueError("message has no downloadable media")
         return await self.client.download(self.media.url, path)

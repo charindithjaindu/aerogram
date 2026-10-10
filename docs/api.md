@@ -36,7 +36,7 @@ Client(name, *, cookies_file=None, cookies=None, session_string=None,
 | `on_message_delete(...)`            | unsent message (`Message`)           |
 | `on_thread_update(...)`             | thread change (`Thread`)             |
 | `on_unseen_count(...)`              | inbox badge change (dict)            |
-| `on_raw_delta(...)`                 | every iris delta (`Delta`)           |
+| `on_raw_delta(...)`                 | every raw delta: lightspeed `dict` (`__typename`) or iris `Delta` |
 | `on_error`                          | handler exceptions                   |
 
 ### Sending
@@ -46,6 +46,9 @@ Client(name, *, cookies_file=None, cookies=None, session_string=None,
 | `await send_message(to, text, reply_to=None)`            | by username/id, creates threads |
 | `await send_text(thread_id, text, reply_to=None)`        | MQTT fast path           |
 | `await send_photo(photo, to=…, thread_id=…, filename=…)` | upload + send            |
+| `await send_video(video, to=…, thread_id=…)` / `await send_voice(audio, …)` | upload + send (voice note) |
+| `await send_media(media, to=…, thread_id=…, thread_fbid=…, mime_type=…, voice=False)` | generic upload + send |
+| `await send_text_to_fbid(thread_fbid, text)`             | GraphQL send by `thread_fbid` |
 | `await send_like(thread_id)`                             | big ❤️                   |
 | `await share_media(thread_id, media_id, is_clip=False)`  | share a post/reel        |
 | `await send_reaction(thread_id, item_id, emoji)`         | react to an item         |
@@ -70,7 +73,7 @@ both from the web API and the web client has no replacement.
 
 ## aerogram.Message
 
-Fields: `thread_id`, `item_id`, `message_id`, `user_id`, `timestamp_us`,
+Fields: `thread_id`, `thread_fbid`, `item_id`, `message_id`, `user_id`, `timestamp_us`,
 `item_type`, `text`, `client_context`, `is_sent_by_viewer`, `reactions`,
 `media`, `thread` (when cached), `raw`.
 

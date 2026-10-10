@@ -47,12 +47,22 @@ path = await message.download_media("pics/cat.jpg")      # exact path
 **re-encodes** uploaded images, so a downloaded photo you sent yourself may
 differ byte-wise from the original (dimensions stay).
 
-## Sending photos
+## Sending photos, videos and voice notes
 
 ```python
 await app.send_photo("cats.jpg", to="some_username")
 await app.send_photo(image_bytes, thread_id=thread_id, filename="cats.jpg")
+await app.send_video("clip.mp4", to="some_username")
+await app.send_voice("note.m4a", thread_id=thread_id)        # AAC/mp4 audio
+await app.send_media(path, thread_fbid=message.thread_fbid)  # generic
 ```
+
+The mime type is guessed from the filename; `send_voice` marks the upload
+as a voice clip so it shows up as a playable voice note.
+
+Realtime pushes can arrive before a voice note's CDN url exists;
+`download_media()` re-reads the message from the thread history (a few
+retries) when the url is missing.
 
 Under the hood (see [protocol.md](protocol.md) for the whole story):
 
@@ -66,7 +76,8 @@ The thread must already exist for photos — call
 
 ## Limitations
 
-- **Video/voice uploads are not implemented** — receiving and downloading
-  them works fine.
+- GIF/sticker *sending* (`IGDirectAnimatedMediaSendMutation`) and media
+  shares/forwards are not implemented; received GIFs can be re-uploaded as
+  files.
 - Story replies and group admin actions are not implemented.
 - E2EE ("encrypted") DM threads are not accessible through this API surface.

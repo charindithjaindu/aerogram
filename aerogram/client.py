@@ -29,7 +29,7 @@ from .http_api import DEFAULT_UA, HttpApi
 from .iris import Delta, Realtime
 from .lightspeed import Lightspeed
 from .session import Session
-from .types import Message, Thread, User
+from .types import Media, Message, Thread, User
 
 log = logging.getLogger("aerogram")
 
@@ -477,46 +477,83 @@ class Client:
         msg.client = self
         return msg
 
-    async def send_photo(self, photo: Union[str, bytes],
+    async def send_media(self, media: Union[str, bytes],
                          to: Optional[Union[str, int]] = None,
                          thread_id: Optional[str] = None,
-                         filename: str = "photo.jpg",
-                         caption: str = "") -> Message:
-        """Send a photo (bytes or a file path) to an existing thread.
+                         filename: Optional[str] = None,
+                         mime_type: Optional[str] = None,
+                         voice: bool = False,
+                         thread_fbid: Optional[str] = None) -> Message:
+        """Send a photo, video or audio file (path or bytes) to an existing
+        thread: mercury upload, then ``IGDirectMediaSendMutation``.
 
-        ``to`` accepts a username or user id; ``thread_id`` (the long
-        34028236… form) takes precedence. The thread must already exist —
-        start the conversation with :meth:`send_message` first for new users.
+        Target: ``thread_fbid``, ``thread_id`` (long id) or ``to`` (username
+        / user id). ``mime_type`` is guessed from ``filename``/the path.
+        ``voice=True`` sends audio as a voice note. Start brand-new
+        conversations with :meth:`send_message` first.
         """
-        if thread_id is None:
-            if to is None:
-                raise InstaDMError("send_photo needs either to= or thread_id=")
-            thread = await self.find_thread_for_user(to)
-            if thread is None:
-                raise NotFoundError(
-                    f"no existing thread with user {to} — send a text with "
-                    "send_message() first, then photos will work")
-            thread_id = thread.id
-        if isinstance(photo, str):
-            with open(photo, "rb") as f:
+        import mimetypes
+        import os
+        if isinstance(media, str):
+            filename = filename or os.path.basename(media)
+            with open(media, "rb") as f:
                 data = f.read()
         else:
-            data = photo
-        fbid = await self.api.upload_mercury(data, filename)
-        resp = await self.api.send_media_message(thread_id, fbid)
+            data = media
+        filename = filename or ("voice.m4a" if voice else "photo.jpg")
+        mime_type = mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+        if not thread_fbid:
+            if thread_id is None:
+                if to is None:
+                    raise InstaDMError("send_media needs to=, thread_id= or thread_fbid=")
+                thread = await self.find_thread_for_user(to)
+                if thread is None:
+                    raise NotFoundError(
+                        f"no existing thread with user {to} — send a text with "
+                        "send_message() first, then media will work")
+            else:
+                thread = await self.get_thread(thread_id)
+            thread_id, thread_fbid = thread.id, thread.fbid
+
+        fbid = await self.api.upload_mercury(data, filename, mime_type, voice_clip=voice)
+        resp = await self.api.send_media_message(thread_fbid, fbid)
         raw = resp.get("data", {}).get("xig_direct_media_send_with_slide_messaging_response") or {}
+        kind = ("voice_media" if voice else "video" if mime_type.startswith("video/")
+                else "audio" if mime_type.startswith("audio/") else "photo")
+        ts = _ms(raw.get("timestamp_ms"))
         msg = Message(
-            thread_id=thread_id,
+            thread_id=thread_id or "",
+            thread_fbid=thread_fbid,
             item_id=str(raw.get("message_id") or ""),
             message_id=str(raw.get("message_id") or ""),
             user_id=str(self.user_id or ""),
-            timestamp_us=(_ms(raw.get("timestamp_ms")) * 1000) if _ms(raw.get("timestamp_ms")) else None,
-            item_type="photo",
-            text=caption,
+            timestamp_us=ts * 1000 if ts else None,
+            item_type=kind,
             is_sent_by_viewer=True,
         )
         msg.client = self
         return msg
+
+    async def send_photo(self, photo: Union[str, bytes], to: Optional[Union[str, int]] = None,
+                         thread_id: Optional[str] = None, filename: str = "photo.jpg",
+                         caption: str = "", **kw) -> Message:
+        """Send a photo. See :meth:`send_media` (``caption`` is ignored by
+        the web mutation and kept for compatibility)."""
+        return await self.send_media(photo, to=to, thread_id=thread_id,
+                                     filename=None if isinstance(photo, str) else filename, **kw)
+
+    async def send_video(self, video: Union[str, bytes], to: Optional[Union[str, int]] = None,
+                         thread_id: Optional[str] = None, filename: str = "video.mp4", **kw) -> Message:
+        """Send a video (mp4). See :meth:`send_media`."""
+        return await self.send_media(video, to=to, thread_id=thread_id,
+                                     filename=None if isinstance(video, str) else filename, **kw)
+
+    async def send_voice(self, audio: Union[str, bytes], to: Optional[Union[str, int]] = None,
+                         thread_id: Optional[str] = None, filename: str = "voice.m4a", **kw) -> Message:
+        """Send audio as a voice note (m4a/mp4 audio). See :meth:`send_media`."""
+        return await self.send_media(audio, to=to, thread_id=thread_id, voice=True,
+                                     filename=None if isinstance(audio, str) else filename, **kw)
 
     async def send_text(self, thread_id: str, text: str,
                         reply_to: Optional[Message] = None) -> Message:
@@ -676,6 +713,22 @@ class Client:
                 f"no existing thread with user {user_id} found in inbox; send the "
                 "first message with send_message(), or pass thread_id directly")
         return thread.id
+
+    async def refresh_media(self, message: Message, attempts: int = 4,
+                            delay: float = 1.5) -> Optional[Media]:
+        """Re-read ``message`` from its thread history to fill in media that
+        was still processing when it was pushed (e.g. voice note urls)."""
+        if not message.thread_id:
+            return message.media
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(delay)
+            messages, _ = await self.get_thread_history(message.thread_id, limit=10)
+            fresh = next((m for m in messages if m.message_id == message.message_id), None)
+            if fresh is not None and fresh.media is not None and fresh.media.url:
+                message.media = fresh.media
+                break
+        return message.media
 
     async def download(self, url: str, path: str | None = None) -> str:
         return await self.api.download(url, path)

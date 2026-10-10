@@ -29,13 +29,13 @@ app.run()
 ## ✨ Features
 
 - **Realtime receive** — messages arrive in milliseconds over the web client's
-  MQTT-over-WebSocket transport, with automatic reconnect and **gap-free
-  resume** (a persisted iris `seq_id` cursor means restarts never miss a
-  message).
+  lightspeed gateway stream, with automatic reconnect and **gap-free
+  resume** (the iris `seq_id` cursor is replayed on every reconnect).
 - **Send by username** — `send_message("friend", "hi!")` resolves the thread
   for you and even starts brand-new conversations.
-- **Photos** — `send_photo(...)` uploads and sends; incoming photos/videos/
-  voice notes arrive parsed with download URLs (`download_media()`).
+- **Photos, videos, voice notes** — `send_photo` / `send_video` /
+  `send_voice` (or `send_media`) upload and send; incoming media arrives
+  parsed with download URLs (`download_media()`).
 - **Reactions, typing indicators, mark-as-read, likes** — all supported.
 - **Pyrogram-style handlers & filters** — `@app.on_message`,
   `filters.text & ~filters.self`, `filters.photo | filters.video`, custom
@@ -138,9 +138,9 @@ Aerogram talks to the same infrastructure the instagram.com web app does:
 
 | Layer    | Transport                                                                 |
 |----------|---------------------------------------------------------------------------|
-| Realtime | MQTT 3.1 **over WebSocket** to `edge-chat.instagram.com/chat` (iris sync) |
-| Sends    | MQTT `/ig_send_message` (fast path) + web Relay mutations on `/api/graphql` |
-| Reading  | REST `https://www.instagram.com/api/v1/direct_v2/…`                        |
+| Receive  | DGW stream `gateway.instagram.com/ws/lightspeed` (slide deltas)            |
+| Sends    | MQTT 3.1 over WebSocket `/ig_send_message` + Relay mutations on `/api/graphql` |
+| Reading  | GraphQL queries on `/api/graphql` (inbox, threads, profiles)               |
 | Auth     | Browser cookies                                                            |
 
 *"MQTT or WebSockets?"* — it's not either/or: the connection **is** a
@@ -152,7 +152,8 @@ the web client's handshake byte-for-byte. The full reverse-engineering story
 ```
 aerogram/
 ├── client.py      # Client facade: decorators, lifecycle, high-level actions
-├── iris.py        # iris subscribe, delta parsing, /ig_send_message channel
+├── lightspeed.py  # DGW lightspeed stream: incoming slide deltas
+├── iris.py        # MQTT iris subscribe + /ig_send_message channel
 ├── mqtt.py        # minimal MQTT 3.1 (MQIsdp) codec + asyncio WSS client
 ├── http_api.py    # REST + GraphQL wrapper: retries, backoff, cookie rotation
 ├── session.py     # cookies.txt / session.json, iris seq_id cursor

@@ -32,8 +32,8 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## Sends fail with `send rejected`
 
-- Realtime not connected yet — send after `start()` resolves and the
-  "iris subscribed" log line appears.
+- Realtime not connected yet — realtime sends wait up to 10s for the MQTT
+  connection, then raise. Check for "MQTT connected" in the logs.
 - Recipient thread doesn't accept messages (user blocked you, deactivated
   account, Meta AI special thread) — the backend returns
   error `1545041` ("recipient unavailable"). Not a bug.
@@ -52,6 +52,10 @@ ones.
 ## The protocol broke (Instagram shipped something)
 
 Symptoms: CONNACK failures, iris subscribe errors, empty message streams.
+
+`MQTT CONNACK rejected: rc=2 (identifier rejected)` means two processes
+are connected with the same session (same device id) — run one bot per
+cookies file.
 Re-run the debug tools to compare against the live web client:
 
 ```bash
