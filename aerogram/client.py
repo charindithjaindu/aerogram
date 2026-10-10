@@ -27,6 +27,7 @@ from .errors import InstaDMError, NotFoundError
 from .filters import Filter
 from .http_api import DEFAULT_UA, HttpApi
 from .iris import Delta, Realtime
+from .lightspeed import Lightspeed
 from .session import Session
 from .types import Message, Thread, User
 
@@ -99,6 +100,9 @@ class Client:
         self._mailbox_id = ""  # GraphQL SlideMailbox id, needed for inbox pagination
         self._user_thread_index: dict[str, str] = {}  # user id/username -> thread id
         self._started = False
+        self._lightspeed: Optional[Lightspeed] = None
+        self._seen_message_ids: dict[str, None] = {}  # insertion-ordered dedupe window
+        self._fbid_miss: dict[str, float] = {}  # thread_fbid -> last failed lookup
         self._last_seq_persist = 0.0
         self._persisted_seq = self.session.seq_id
 
@@ -146,11 +150,18 @@ class Client:
             resnapshot=self._resnapshot_cursor,
         )
         await self._realtime.start()
+        # incoming DMs: the edge-chat iris subscription no longer pushes them
+        # for web sessions; the lightspeed stream does (see lightspeed.py)
+        self._lightspeed = Lightspeed(self.session, self.user_agent,
+                                      on_delta=self._handle_slide_delta)
+        self._lightspeed.start()
         self._started = True
         log.info("client started (user %s, seq_id %s)", self.user_id, self.session.seq_id)
 
     async def stop(self) -> None:
         self._started = False
+        if self._lightspeed:
+            await self._lightspeed.stop()
         if self._realtime:
             await self._realtime.stop()
         try:
@@ -279,6 +290,79 @@ class Client:
             except Exception:
                 log.warning("gap-heal badge-count fetch failed; iris resync will cover it", exc_info=True)
 
+    def _first_sighting(self, *keys: str) -> bool:
+        """Dedupe messages that may arrive on both realtime channels."""
+        keys = tuple(k for k in keys if k)
+        if any(k in self._seen_message_ids for k in keys):
+            return False
+        for k in keys:
+            self._seen_message_ids[k] = None
+        while len(self._seen_message_ids) > 2000:
+            del self._seen_message_ids[next(iter(self._seen_message_ids))]
+        return True
+
+    async def _thread_for_fbid(self, fbid: str) -> Optional[Thread]:
+        """Map a slide delta's ``thread_fbid`` to the cached thread, fetching
+        the newest inbox page once when it is unknown (e.g. a new thread)."""
+        if not fbid:
+            return None
+        for refresh in (False, True):
+            if refresh:
+                if time.monotonic() - self._fbid_miss.get(fbid, -1e9) < 60:
+                    return None
+                self._fbid_miss[fbid] = time.monotonic()
+                try:
+                    await self.get_inbox()
+                except InstaDMError as e:
+                    log.warning("inbox refresh for thread %s failed: %s", fbid, e)
+                    return None
+            for t in self._threads.values():
+                if t.fbid == fbid:
+                    return t
+        return None
+
+    async def _handle_slide_delta(self, delta: dict) -> None:
+        """Slide deltas from the lightspeed stream (dicts with ``__typename``)."""
+        await self.dispatcher.dispatch(RAW_DELTA, self, delta)
+        typename = delta.get("__typename")
+        if typename in ("SlideUQPPNewMessage", "SlideUQPPNewRavenMessage"):
+            node = delta.get("message") or {}
+            if not self._first_sighting(str(node.get("message_id") or node.get("id") or ""),
+                                        "otid:" + str(node.get("offline_threading_id") or "")):
+                return
+            fbid = str(delta.get("thread_fbid") or node.get("thread_fbid") or "")
+            thread = await self._thread_for_fbid(fbid)
+            message = Message.parse_slide(node, thread_id=thread.id if thread else "",
+                                          viewer_id=str(self.user_id or ""))
+            message.client = self
+            message.thread = thread
+            if not self.receive_own_messages and message.is_sent_by_viewer:
+                return
+            if thread is not None:
+                thread.messages.insert(0, message)
+                del thread.messages[self.max_cached_messages:]
+            await self.dispatcher.dispatch(MESSAGE, self, message)
+        elif typename == "SlideUQPPDeleteMessage":
+            fbid = str(delta.get("thread_fbid") or "")
+            thread = await self._thread_for_fbid(fbid)
+            mid = str(delta.get("message_id") or (delta.get("message") or {}).get("message_id") or "")
+            message = Message(thread_id=thread.id if thread else "", thread_fbid=fbid,
+                              item_id=mid, message_id=mid, raw=delta)
+            message.client = self
+            message.thread = thread
+            await self.dispatcher.dispatch(MESSAGE_DELETE, self, message)
+        self._maybe_persist_seq()
+
+    def _maybe_persist_seq(self) -> None:
+        # Persist the cursor periodically: only saving on stop() means a crash
+        # replays every delta since the last graceful shutdown through the
+        # handlers again. 30s of at-most replay is the accepted tradeoff.
+        if (self.session.seq_id != self._persisted_seq
+                and time.monotonic() - self._last_seq_persist >= 30.0):
+            self._persisted_seq = self.session.seq_id
+            self._last_seq_persist = time.monotonic()
+            self._persist_session()
+
     async def _handle_delta(self, delta: Delta) -> None:
         await self.dispatcher.dispatch(RAW_DELTA, self, delta)
         if delta.is_new_message:
@@ -286,6 +370,9 @@ class Client:
             raw.setdefault("item_id", delta.item_id)
             message = Message.parse(raw, thread_id=delta.thread_id)
             message.client = self
+            if not self._first_sighting(message.message_id, "otid:" + message.client_context
+                                        if message.client_context else ""):
+                return
             if not self.receive_own_messages and message.is_sent_by_viewer:
                 return
             cached = self._threads.get(delta.thread_id)
@@ -309,14 +396,7 @@ class Client:
         elif delta.is_unseen_count:
             value = delta.value_as_dict()
             await self.dispatcher.dispatch(UNSEEN_COUNT, self, value)
-        # Persist the iris cursor periodically: only saving on stop() means a
-        # crash replays every delta since the last graceful shutdown through
-        # the handlers again. 30s of at-most replay is the accepted tradeoff.
-        if (self.session.seq_id != self._persisted_seq
-                and time.monotonic() - self._last_seq_persist >= 30.0):
-            self._persisted_seq = self.session.seq_id
-            self._last_seq_persist = time.monotonic()
-            self._persist_session()
+        self._maybe_persist_seq()
 
     # -- DM actions -----------------------------------------------------------
 
@@ -462,6 +542,21 @@ class Client:
             client_context=str(raw.get("client_context") or ""),
             is_sent_by_viewer=True,
         )
+        msg.client = self
+        return msg
+
+    async def send_text_to_fbid(self, thread_fbid: str, text: str) -> Message:
+        """Send text by ``thread_fbid`` through the GraphQL mutation (works
+        without the long thread id or the realtime connection)."""
+        if not thread_fbid:
+            raise InstaDMError("no thread_fbid to send to")
+        resp = await self.api.send_text_message(text, thread_fbid=thread_fbid)
+        raw = resp.get("data", {}).get("xig_direct_text_send_with_slide_messaging_response") or {}
+        ts = _ms(raw.get("timestamp_ms"))
+        msg = Message(thread_fbid=thread_fbid, item_id=str(raw.get("message_id") or ""),
+                      message_id=str(raw.get("message_id") or ""), user_id=str(self.user_id or ""),
+                      timestamp_us=ts * 1000 if ts else None, item_type="text", text=text,
+                      is_sent_by_viewer=True)
         msg.client = self
         return msg
 

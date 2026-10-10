@@ -166,6 +166,7 @@ class Message:
     client: Any = field(default=None, repr=False)  # backref, set by the library
     thread: Optional["Thread"] = field(default=None, repr=False)  # cached thread, when known
     thread_id: str = ""
+    thread_fbid: str = ""  # set for GraphQL/lightspeed messages
     item_id: str = ""
     message_id: str = ""
     user_id: str = ""
@@ -223,6 +224,7 @@ class Message:
             item_type = TEXT
         return cls(
             thread_id=thread_id,
+            thread_fbid=str(node.get("thread_fbid") or ""),
             item_id=mid,
             message_id=mid,
             user_id=user_id,
@@ -242,7 +244,11 @@ class Message:
         return self.media is not None
 
     async def reply_text(self, text: str) -> "Message":
-        return await self.client.send_text(self.thread_id, text)
+        if self.thread_id:
+            return await self.client.send_text(self.thread_id, text)
+        # thread not resolvable to its long id (not in the recent inbox):
+        # the GraphQL send only needs thread_fbid
+        return await self.client.send_text_to_fbid(self.thread_fbid, text)
 
     async def mark_seen(self) -> None:
         await self.client.mark_seen(self.thread_id, self.item_id)

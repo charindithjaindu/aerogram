@@ -314,8 +314,17 @@ class Realtime:
 
     # -- sending ------------------------------------------------------------
 
+    async def wait_connected(self, timeout: float = 10.0) -> bool:
+        """Wait for the MQTT connection (start() and reconnects connect in
+        the background). Returns whether it is connected."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not self.connected and loop.time() < deadline:
+            await asyncio.sleep(0.05)
+        return self.connected
+
     async def _send_item(self, payload: dict, timeout: float = 15.0) -> dict:
-        if not self._mqtt or not self._mqtt.connected:
+        if not await self.wait_connected():
             raise SendError("realtime not connected")
         cc = payload.setdefault("client_context", new_client_context())
         payload.setdefault("device_id", self._device_id)
