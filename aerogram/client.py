@@ -368,9 +368,9 @@ class Client:
         inbox, otherwise starts a new conversation (``recipient_igids`` path).
         """
         thread = await self.find_thread_for_user(to)
-        if thread and thread.v2_id:
+        if thread and thread.fbid:
             resp = await self.api.send_text_message(
-                text, thread_v2_id=thread.v2_id,
+                text, thread_fbid=thread.fbid,
                 reply_to_message_id=reply_to.message_id if reply_to else None)
             thread_id = thread.id
         else:
@@ -491,16 +491,23 @@ class Client:
             return self._ingest_mailbox(await self.api.inbox())
         return self._ingest_threads(await self.api.inbox_page(self._mailbox_id, cursor, limit))
 
-    async def get_thread(self, thread_id: str, refresh: bool = False) -> Thread:
+    async def get_thread(self, thread_id: str, refresh: bool = False,
+                         scan_pages: int = 3) -> Thread:
         """The thread with this (long) ``thread_id``, from the cache or the
-        newest inbox page. Brand-new threads always appear on that page."""
-        if not refresh and thread_id in self._threads and self._threads[thread_id].v2_id:
-            return self._threads[thread_id]
-        await self.get_inbox()
-        thread = self._threads.get(thread_id)
-        if thread is None or not thread.v2_id:
-            raise NotFoundError(f"thread {thread_id} not in the recent inbox")
-        return thread
+        newest ``scan_pages`` inbox pages (brand-new threads are on the
+        first). Message-request threads are not in the inbox."""
+        cached = self._threads.get(thread_id)
+        if not refresh and cached is not None and cached.v2_id:
+            return cached
+        cursor: Optional[str] = None
+        for _ in range(scan_pages):
+            _, cursor = await self.get_inbox(cursor)
+            thread = self._threads.get(thread_id)
+            if thread is not None and thread.v2_id:
+                return thread
+            if not cursor:
+                break
+        raise NotFoundError(f"thread {thread_id} not in the {scan_pages} newest inbox pages")
 
     async def get_thread_history(self, thread_id: str, cursor: str | None = None,
                                  limit: int = 20) -> tuple[list[Message], str | None]:

@@ -12,7 +12,7 @@ the new *Reads* section of `docs/protocol.md`.
   call, which also warms the thread cache; `/direct_v2/get_badge_count/`
   is the fallback and the reconnect gap-heal.
 - **Fixed:** `get_inbox()` (paginated), `get_thread_history()` (paginated,
-  newest first), `find_thread_for_user()`, `thread_id_for_user()`,
+  newest first; the thread must be in the 3 newest inbox pages or cached), `find_thread_for_user()`, `thread_id_for_user()`,
   `send_message()` / `send_photo()` by username, `mute_thread()`.
 - **Fixed: `user_by_username()`** — resolves through the profile page
   document + `PolarisProfilePageContentQuery`; the REST profile endpoints
@@ -32,6 +32,13 @@ the new *Reads* section of `docs/protocol.md`.
   already used mercury uploads) and the REST `mark_seen`/`hide_thread`/
   `get_presence`/`user_info_by_*` wrappers.
 - `X-ASBD-ID` updated to the web client's current `359341`.
+- **Fixed: `send_message()` to an existing thread** now passes the thread's
+  `thread_fbid` as `ig_thread_igid` (what the web composer sends);
+  `HttpApi.send_text_message(thread_v2_id=)` is now `thread_fbid=`.
+- Known limitation: messages fetched through `get_thread_history()` carry
+  the `mid.$…` id as `item_id`; `react()` on them goes over MQTT, which
+  expects the numeric iris item id, so reacting to history messages is
+  untested and likely fails. Messages received in realtime are unaffected.
 
 ## 0.1.1 — reliability & performance fixes
 

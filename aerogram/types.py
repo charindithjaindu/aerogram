@@ -261,8 +261,8 @@ class Thread:
     """A DM conversation."""
 
     id: str = ""
-    v2_id: str = ""        # thread_key: short id used by send mutations / thread detail
-    fbid: str = ""         # thread_fbid: used by mute and message-list pagination
+    v2_id: str = ""        # thread_key: thread detail query, /direct/t/<key>/ URLs
+    fbid: str = ""         # thread_fbid: text-send ig_thread_igid, mute, message-list pagination
     users: list[User] = field(default_factory=list)
     is_group: bool = False
     title: str = ""

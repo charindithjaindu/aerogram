@@ -482,15 +482,15 @@ class HttpApi:
             raise InstaDMError(f"mercury upload returned no fbid: {js}")
         return str(fbid)
 
-    async def send_text_message(self, text: str, thread_v2_id: str | None = None,
+    async def send_text_message(self, text: str, thread_fbid: str | None = None,
                                 recipient_igids: list[str] | None = None,
                                 reply_to_message_id: str | None = None) -> dict:
         """Send text via the web client's slide mutation. Either an existing
-        thread (``thread_v2_id``) or fresh recipients (``recipient_igids``,
+        thread (``thread_fbid``, i.e. ``Thread.fbid``) or fresh recipients (``recipient_igids``,
         creates a new thread) must be given."""
         variables = {
             "text": {"sensitive_string_value": text},
-            "ig_thread_igid": thread_v2_id,
+            "ig_thread_igid": thread_fbid,
             "recipient_igids": recipient_igids,
             "offline_threading_id": new_client_context(),
             "send_attribution": "igd_web_chat_tab:in_thread",

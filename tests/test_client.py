@@ -165,3 +165,22 @@ def test_message_parse_slide():
                          "preview_cdn_url": "https://cdn/p.jpg"}]}}, viewer_id="777")
     assert img.is_sent_by_viewer
     assert (img.media.media_type, img.media.url, img.item_type) == ("photo", "https://cdn/x.jpg", "photo")
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_existing_thread_uses_thread_fbid(tmp_path):
+    """The web composer sends ig_thread_igid = thread_fbid, not thread_key."""
+    c = make_client(tmp_path)
+    c._store_thread(Thread.parse_slide(slide_thread(key="900", fbid="800")))
+    sent = {}
+
+    async def send_text_message(text, thread_fbid=None, recipient_igids=None,
+                                reply_to_message_id=None):
+        sent.update(thread_fbid=thread_fbid, recipient_igids=recipient_igids)
+        return {"data": {"xig_direct_text_send_with_slide_messaging_response": {
+            "message_id": "mid.$new"}}}
+
+    c.api.send_text_message = send_text_message
+    msg = await c.send_message("alice", "hi")
+    assert sent == {"thread_fbid": "800", "recipient_igids": None}
+    assert (msg.thread_id, msg.message_id) == ("111", "mid.$new")

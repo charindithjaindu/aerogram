@@ -174,7 +174,7 @@ are **top-level** (the query wraps them into `data` itself):
 
 ```json
 {"text": {"sensitive_string_value": "hi"},
- "ig_thread_igid": "<thread_v2_id>",       // existing thread
+ "ig_thread_igid": "<thread_fbid>",        // existing thread
  "recipient_igids": ["<uid>"],              // …or a NEW conversation (mutually exclusive)
  "offline_threading_id": "<otid>",
  "send_attribution": "igd_web_chat_tab:in_thread",
@@ -185,7 +185,8 @@ are **top-level** (the query wraps them into `data` itself):
  "forwarded_from_thread_id": null, "is_forwarded_from_own_message": null}
 ```
 
-Gotcha: `ig_thread_igid` is the **thread_v2_id** (short numeric), while the
+Gotcha: `ig_thread_igid` is the thread's **`thread_fbid`** (not `thread_key`
+— the web composer passes `thread.thread_fbid`), while the
 media mutation wants the long `thread_id`.
 
 Media send (`IGDirectMediaSendMutation`, doc `25766288509716264`):
@@ -218,9 +219,10 @@ see `HttpApi` for the exact sets.
 | `PolarisProfilePageContentQuery` (`28036671149327607`) | `id` (user pk) | `data.user` |
 | `IGDInboxInfoMuteToggleOffMsysMutation` (`26360506043651125`) | `thread_fbid`, `mute_seconds` (-1 forever, 0 unmute), `offline_threading_id` | mute state |
 
-A thread carries three ids: `thread_id` (long, `34028236…` — iris paths and
-MQTT sends), `thread_key` (short — `ig_thread_igid` in sends, thread
-detail) and `thread_fbid` (mute, message-list pagination). Messages are
+A thread carries three ids: `thread_id` (long, `34028236…` — iris paths,
+MQTT sends, media send, mark-read), `thread_key` (thread detail query,
+`/direct/t/<key>/` URLs) and `thread_fbid` (`ig_thread_igid` in text sends,
+mute, message-list pagination). Key and fbid are often different. Messages are
 `slide_messages` nodes: `message_id` `mid.$…`, `sender.igid` = user pk,
 `text_body`, `timestamp_ms`, `content.__typename` for media.
 
