@@ -137,7 +137,15 @@ class Media:
         typename = content.get("__typename") or ""
         if "xma" in content:
             xma = content.get("xma") or {}
-            return cls(media_type=XMA_SHARE, id=str(xma.get("target_id") or ""),
+            url = xma.get("target_url") or ""
+            decoration = (xma.get("xmaPreviewImage") or {}).get("preview_image_decoration_type")
+            if "/reel/" in url or decoration == "REEL":
+                kind = CLIP            # shared reel: re-share with share_media(is_clip=True)
+            elif "/p/" in url:
+                kind = MEDIA_SHARE     # shared post: share_media(is_clip=False)
+            else:
+                kind = XMA_SHARE       # other cards (profiles, stories, links)
+            return cls(media_type=kind, id=str(xma.get("target_id") or ""),
                        url=xma.get("target_url") or "",
                        thumbnail_url=(xma.get("preview_image") or {}).get("url") or "",
                        raw=content)

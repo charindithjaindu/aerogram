@@ -194,3 +194,19 @@ def test_media_parse_slide_video_and_voice():
     a = Media.parse_slide({"__typename": "SlideMessageAudiosContent", "audio_attachments": [
         {"attachment_fbid": "2", "attachment_cdn_url": "https://cdn/a.mp4", "playable_duration_ms": 1396}]})
     assert (a.media_type, a.url, a.duration_seconds) == ("voice_media", "https://cdn/a.mp4", 1.396)
+
+
+def test_media_parse_slide_shared_reel_and_post():
+    from aerogram.types import Media
+
+    def xma(url, decoration=None):
+        return {"__typename": "SlideMessageXMAContent", "xma": {
+            "target_id": "123", "target_url": url, "preview_image": {"url": "https://cdn/p.jpg"},
+            "xmaPreviewImage": {"preview_image_decoration_type": decoration}}}
+
+    reel = Media.parse_slide(xma("https://www.instagram.com/reel/AbC/?id=123_9", "REEL"))
+    post = Media.parse_slide(xma("https://www.instagram.com/p/XyZ/"))
+    other = Media.parse_slide(xma("https://www.instagram.com/someone/"))
+    assert (reel.media_type, reel.id) == ("clip", "123")
+    assert (post.media_type, post.id, post.thumbnail_url) == ("media_share", "123", "https://cdn/p.jpg")
+    assert other.media_type == "xma_share"

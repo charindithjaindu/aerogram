@@ -32,8 +32,18 @@ async def on_voice(client, message):
 | `duration_seconds` | voice notes / videos                          |
 | `raw`              | original media payload                        |
 
-Shared posts and reels arrive as `media_share` / `clip` / `xma_share` items —
-`media.thumbnail_url` gives you the preview, and `message.raw` the full data.
+Shared posts and reels arrive as share cards: `media.media_type` is
+`"clip"` for a reel, `"media_share"` for a post and `"xma_share"` for other
+cards (profiles, stories, links). `media.id` is the post/reel media id,
+`media.url` its link and `media.thumbnail_url` the preview image.
+
+Share one (back) as a real card — the bare media id works for both:
+
+```python
+if message.media and message.media.media_type in ("clip", "media_share"):
+    await client.share_media(message.thread_id, message.media.id,
+                             is_clip=message.media.media_type == "clip")
+```
 
 ## Downloading
 

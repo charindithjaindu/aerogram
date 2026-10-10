@@ -46,6 +46,9 @@ the new *Reads* section of `docs/protocol.md`.
   GraphQL/lightspeed now parse into `Media`.
 - Realtime sends wait up to 10s for the MQTT connection instead of failing
   immediately after `start()`.
+- Shared reels/posts now parse as `media_type` `"clip"` / `"media_share"`
+  with `media.id` = the media id, so `share_media()` can re-share them
+  (verified live for both; other cards stay `"xma_share"`).
 - Message requests are not delivered in realtime (Instagram pushes nothing
   until a request is accepted) — documented, not handled.
 - **Fixed: `send_message()` to an existing thread** now passes the thread's
