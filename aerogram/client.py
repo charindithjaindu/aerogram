@@ -205,11 +205,20 @@ class Client:
         self.user_id = self.session.user_id or self.session.ds_user_id
 
     async def _resnapshot_cursor(self) -> None:
-        """Refresh the iris cursor from the REST inbox (also used when the
-        broker demands a resnapshot)."""
-        inbox = await self.api.inbox()
-        self.session.seq_id = int(inbox.get("seq_id") or 0)
-        self.session.snapshot_at_ms = int(inbox.get("snapshot_at_ms") or 0)
+        """Refresh the iris cursor (also used when the broker demands a
+        resnapshot).
+
+        The web REST inbox (``/direct_v2/inbox/``) now 404s, so the cursor
+        comes from ``get_badge_count``. The inbox is still tried afterwards
+        to warm the thread cache, but its failure is not fatal."""
+        badge = await self.api.badge_count()
+        self.session.seq_id = int(badge.get("seq_id") or 0)
+        self.session.snapshot_at_ms = int(badge.get("badge_count_at_ms") or 0)
+        try:
+            inbox = await self.api.inbox()
+        except NotFoundError:
+            log.info("REST inbox unavailable; thread cache fills from realtime")
+            return
         for t in inbox.get("inbox", {}).get("threads", []):
             self._store_thread(Thread.parse(t))
 
@@ -246,12 +255,12 @@ class Client:
 
     async def _on_realtime_connect(self, is_reconnect: bool) -> None:
         if is_reconnect and self._started:
-            log.info("realtime reconnected — healing any gaps via fresh inbox fetch")
+            log.info("realtime reconnected — healing any gaps via fresh badge-count fetch")
             try:
-                inbox = await self.api.inbox()
-                self.session.seq_id = max(self.session.seq_id, int(inbox.get("seq_id") or 0))
+                badge = await self.api.badge_count()
+                self.session.seq_id = max(self.session.seq_id, int(badge.get("seq_id") or 0))
             except Exception:
-                log.warning("gap-heal inbox fetch failed; iris resync will cover it", exc_info=True)
+                log.warning("gap-heal badge-count fetch failed; iris resync will cover it", exc_info=True)
 
     async def _handle_delta(self, delta: Delta) -> None:
         await self.dispatcher.dispatch(RAW_DELTA, self, delta)

@@ -171,6 +171,13 @@ class HttpApi:
             params["cursor"] = cursor
         return await self.get_json("/direct_v2/inbox/", params)
 
+    async def badge_count(self) -> dict:
+        """Unread badge + current iris ``seq_id`` / ``badge_count_at_ms``.
+
+        Still served on the web API after ``/direct_v2/inbox/`` was removed
+        there (404), so it is what seeds the realtime cursor."""
+        return await self.get_json("/direct_v2/get_badge_count/", {"no_raven": "1"})
+
     async def thread(self, thread_id: str, cursor: str | None = None, limit: int = 30) -> dict:
         params: dict[str, Any] = {"limit": limit}
         if cursor:

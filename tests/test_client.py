@@ -76,3 +76,40 @@ async def test_seq_cursor_persisted_periodically(tmp_path):
     c.session.seq_id = 501
     await c._handle_delta(d)
     assert calls == [500]           # throttled: not again within 30s
+
+
+@pytest.mark.asyncio
+async def test_resnapshot_uses_badge_count_when_inbox_404s(tmp_path):
+    """The web REST inbox now 404s; the iris cursor must still be seeded."""
+    from aerogram.errors import NotFoundError
+    c = make_client(tmp_path)
+
+    async def badge_count():
+        return {"seq_id": "18092", "badge_count_at_ms": 1791594001146}
+
+    async def inbox(*a, **kw):
+        raise NotFoundError("Not found: /direct_v2/inbox/")
+
+    c.api.badge_count = badge_count
+    c.api.inbox = inbox
+    await c._resnapshot_cursor()
+    assert c.session.seq_id == 18092
+    assert c.session.snapshot_at_ms == 1791594001146
+
+
+@pytest.mark.asyncio
+async def test_resnapshot_still_warms_cache_when_inbox_works(tmp_path):
+    c = make_client(tmp_path)
+
+    async def badge_count():
+        return {"seq_id": 5, "badge_count_at_ms": 10}
+
+    async def inbox(*a, **kw):
+        return {"inbox": {"threads": [{"thread_id": "111", "users": [
+            {"pk": "42", "username": "alice"}]}]}}
+
+    c.api.badge_count = badge_count
+    c.api.inbox = inbox
+    await c._resnapshot_cursor()
+    assert c.session.seq_id == 5
+    assert c._user_thread_index["alice"] == "111"

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: `Client.start()` failed with `NotFoundError` on
+  `/direct_v2/inbox/`.** Instagram removed the REST inbox from the web API
+  (it now returns a 404 page). The iris cursor (`seq_id` /
+  `snapshot_at_ms`) is now seeded from `/direct_v2/get_badge_count/`, which
+  is still served, and the reconnect gap-heal uses it too. The inbox is
+  still tried to warm the thread cache, but a 404 there is no longer fatal.
+- New `HttpApi.badge_count()`.
+- Known gap: `get_inbox()`, `find_thread_for_user()` and sending by
+  username still depend on the removed endpoint. `reply_text()` and
+  `send_text(thread_id, ...)` are unaffected.
+
 ## 0.1.1 — reliability & performance fixes
 
 - **Fixed: sending from inside a handler deadlocked realtime.** Handlers now
