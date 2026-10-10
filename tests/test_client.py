@@ -315,3 +315,50 @@ async def test_stop_flushes_held_mqtt_copies(tmp_path):
                                        "message_id": "mid.4"}))
     await c.stop()
     assert [m.message_id for m in got] == ["mid.4"]
+
+
+@pytest.mark.asyncio
+async def test_post_retries_only_when_nothing_was_sent(tmp_path):
+    import httpx
+    from aerogram.errors import InstaDMError
+    c = make_client(tmp_path)
+    calls = []
+
+    def flaky_connect(request):
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ConnectError("refused")
+        return httpx.Response(200, text="ok")
+    c.api._client = httpx.AsyncClient(transport=httpx.MockTransport(flaky_connect))
+    assert (await c.api._post_once("https://www.instagram.com/x")).text == "ok"
+    assert len(calls) == 2
+
+    calls.clear()
+
+    def read_timeout(request):
+        calls.append(1)
+        raise httpx.ReadTimeout("slow")   # may have been applied: no retry
+    c.api._client = httpx.AsyncClient(transport=httpx.MockTransport(read_timeout))
+    with pytest.raises(InstaDMError):
+        await c.api._post_once("https://www.instagram.com/x")
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_reply_text_prefers_graphql_send(tmp_path):
+    c = make_client(tmp_path)
+    sent = []
+
+    async def by_fbid(fbid, text):
+        sent.append(("gql", fbid))
+
+    async def by_mqtt(tid, text):
+        sent.append(("mqtt", tid))
+    c.send_text_to_fbid, c.send_text = by_fbid, by_mqtt
+    m = Message(thread_id="111", thread_fbid="fb1")
+    m.client = c
+    await m.reply_text("hi")
+    m2 = Message(thread_id="222")
+    m2.client = c
+    await m2.reply_text("hi")
+    assert sent == [("gql", "fb1"), ("mqtt", "222")]

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: a shared reel or post could reach handlers as an empty
+  `photo`.** Instagram pushes new messages on the MQTT socket again, about
+  100 ms before lightspeed, and that copy is partial (a shared post has no
+  media at all). MQTT copies of media/share messages now wait up to
+  `Client.MEDIA_FALLBACK_DELAY` (3 s) for the complete lightspeed copy;
+  text still dispatches from whichever channel is first.
+- **Fixed:** messages received over MQTT now carry `thread_fbid`.
+- **Faster replies:** `Message.reply_text()` sends through the GraphQL
+  mutation (reply arrives ~0.2 s sooner than over MQTT, and works while the
+  socket reconnects).
+- **No cold connections:** HTTP connections are kept 50 s and kept warm
+  with a tiny request after 40 s idle, and page tokens load at `start()`.
+  This removed 0.4-1 s from the first reply after an idle period.
+- Sends and uploads retry once when the connection cannot be opened (never
+  after the request may have reached Instagram).
+
 ## 0.2.0 - Instagram's new web DM transport
 
 Instagram removed the web REST DM API (`/direct_v2/inbox/`, `threads/…`,

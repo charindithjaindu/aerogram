@@ -1,7 +1,7 @@
 """Low-level REST wrapper for Instagram's web API (cookie auth).
 
-Only GET endpoints and uploads are needed here for DM work - sends ride the
-realtime MQTT channel (exactly what instagram.com's own client does).
+Web requests to instagram.com: the GraphQL queries and mutations the web
+client uses (reads, text/media sends), mercury uploads and media downloads.
 Includes the reliability plumbing: retries with backoff, 429/Retry-After
 handling, csrf-cookie rotation tracking and typed error mapping.
 """
@@ -33,6 +33,12 @@ MAX_RETRY_AFTER = 60.0  # never sleep longer than this inside _request
 # Re-rendering the token page costs ~800KB. Tokens outlive this; graphql()
 # re-renders early when Instagram reports them expired.
 PAGE_TOKEN_TTL = 6 * 3600
+# instagram.com keeps an idle connection open for 60-120s. Reusing one past
+# that costs a fresh TCP+TLS handshake (~0.4-1s on every reply of a mostly
+# idle bot), so keep connections for less than the server does and touch
+# them before they go cold (see keep_warm).
+KEEPALIVE_EXPIRY = 50.0
+KEEP_WARM_INTERVAL = 40.0
 
 
 def _parse_retry_after(value: str | None) -> float | None:
@@ -49,13 +55,37 @@ class HttpApi:
                  timeout: float = 20.0) -> None:
         self.session = session
         self._ua = user_agent
-        self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+        self._client = httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False,
+            limits=httpx.Limits(keepalive_expiry=KEEPALIVE_EXPIRY),
+            event_hooks={"request": [self._touch]})
+        self._last_request = 0.0
         self._page_cache: dict = {}
         self._page_lock = asyncio.Lock()
         self._req_counter = _Counter()
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    async def _touch(self, request: httpx.Request) -> None:
+        if request.url.host == "www.instagram.com":
+            self._last_request = time.monotonic()
+
+    async def keep_warm(self) -> None:
+        """Run forever: when nothing has gone to instagram.com for
+        ``KEEP_WARM_INTERVAL`` seconds, make a tiny request so the pooled
+        connection stays open and the next send skips the handshake."""
+        while True:
+            idle = time.monotonic() - self._last_request
+            if idle < KEEP_WARM_INTERVAL:
+                await asyncio.sleep(KEEP_WARM_INTERVAL - idle)
+                continue
+            try:
+                await self._client.get("https://www.instagram.com/robots.txt",
+                                       headers={"User-Agent": self._ua})
+            except httpx.HTTPError as e:
+                log.debug("keep-warm request failed: %s", e)
+                self._last_request = time.monotonic()
 
     # -- core request plumbing ----------------------------------------------
 
@@ -377,8 +407,8 @@ class HttpApi:
             data["variables"] = json.dumps(variables, separators=(",", ":"))
             data["doc_id"] = doc_id
             headers = self._web_headers(tok, friendly_name)
-            resp = await self._client.post("https://www.instagram.com/api/graphql",
-                                           data=data, headers=headers)
+            resp = await self._post_once("https://www.instagram.com/api/graphql",
+                                         data=data, headers=headers)
             self._absorb_cookies(resp)
             if resp.status_code == 429:
                 raise RateLimited(f"graphql {friendly_name} rate limited (429)",
@@ -409,6 +439,24 @@ class HttpApi:
             raise InstaDMError(
                 f"graphql {friendly_name} failed: {err.get('message')}")
         return js
+
+    async def _post_once(self, url: str, **kw) -> httpx.Response:
+        """POST a mutation. A failure to *connect* means nothing was sent,
+        so that alone is retried; anything later is ambiguous (the server may
+        have applied it) and raised rather than risking a double send."""
+        for attempt in range(2):
+            try:
+                return await self._client.post(url, **kw)
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+                if attempt:
+                    raise InstaDMError(f"POST {url}: cannot connect ({e})") from e
+                log.warning("POST %s: connect failed (%s), retrying once", url, type(e).__name__)
+                await asyncio.sleep(0.5)
+            except httpx.HTTPError as e:
+                raise InstaDMError(
+                    f"POST {url} failed ({type(e).__name__}: {e}) - not retried "
+                    "to avoid duplicating a possibly-applied mutation") from e
+        raise AssertionError("unreachable")
 
     async def mark_thread_as_read(self, thread_id: str, message_id: str) -> dict:
         """Web-client equivalent of marking a thread read (Relay mutation)."""
@@ -475,7 +523,7 @@ class HttpApi:
         if voice_clip:
             form["voice_clip"] = "true"
         headers = self._web_headers(tok, "FileMercuryUploadService")
-        resp = await self._client.post(
+        resp = await self._post_once(
             "https://www.instagram.com/ajax/mercury/upload.php",
             data=form, files={"farr": (filename, data, mime_type)}, headers=headers)
         self._absorb_cookies(resp)

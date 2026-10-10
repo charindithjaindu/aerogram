@@ -1,8 +1,8 @@
 """Realtime *receive* channel: the web client's DGW "lightspeed" stream.
 
-Instagram's web client no longer gets incoming DMs over the edge-chat MQTT
-iris subscription (that socket still accepts ``/ig_send_message`` sends but
-pushes nothing). Messages now arrive on ``wss://gateway.instagram.com/ws/
+Instagram's web client gets incoming DMs here, not over the edge-chat MQTT
+iris subscription (that socket takes ``/ig_send_message`` sends; its
+pushes, when it sends any, are partial). Messages arrive on ``wss://gateway.instagram.com/ws/
 lightspeed`` as *slide deltas* - the same JSON node shapes the GraphQL
 queries return - wrapped in a tiny binary framing ("DGW") and protobuf.
 

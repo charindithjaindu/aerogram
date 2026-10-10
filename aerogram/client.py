@@ -106,6 +106,7 @@ class Client:
         self._started = False
         self._lightspeed: Optional[Lightspeed] = None
         self._seen_message_ids: dict[str, None] = {}  # insertion-ordered dedupe window
+        self._warm_task: Optional[asyncio.Task] = None
         self._fallback_tasks: dict[asyncio.Task, tuple[Message, str]] = {}
         self._fbid_miss: dict[str, float] = {}  # thread_fbid -> last failed lookup
         self._last_seq_persist = 0.0
@@ -155,16 +156,27 @@ class Client:
             resnapshot=self._resnapshot_cursor,
         )
         await self._realtime.start()
-        # incoming DMs: the edge-chat iris subscription no longer pushes them
-        # for web sessions; the lightspeed stream does (see lightspeed.py)
+        # incoming DMs: lightspeed is the complete, dependable source; iris
+        # also pushes them at times, as partial items (see _handle_delta)
         self._lightspeed = Lightspeed(self.session, self.user_agent,
                                       on_delta=self._handle_slide_delta)
         self._lightspeed.start()
+        self._warm_task = asyncio.create_task(self._warm_up(), name="aerogram-keep-warm")
         self._started = True
         log.info("client started (user %s, seq_id %s)", self.user_id, self.session.seq_id)
 
+    async def _warm_up(self) -> None:
+        # the first send would otherwise render the token page (~1s) first
+        try:
+            await self.api._page_tokens()
+        except Exception as e:
+            log.warning("page token prefetch failed (retried on first send): %s", e)
+        await self.api.keep_warm()
+
     async def stop(self) -> None:
         self._started = False
+        if self._warm_task:
+            self._warm_task.cancel()
         if self._lightspeed:
             await self._lightspeed.stop()
         if self._realtime:

@@ -20,9 +20,11 @@ All tokens/ids below are placeholders, obviously.
 
 ## Layer 0 - receiving: the lightspeed DGW stream
 
-As of late 2026 the edge-chat MQTT iris subscription below still connects
-and accepts sends, but **pushes no DMs** to web sessions (`/ig_message_sync`
-stays silent while the inbox `seq_id` advances). instagram.com receives on
+This is instagram.com's receive channel and aerogram's source of truth
+for incoming messages. The edge-chat MQTT iris subscription (Layer 1) is
+not reliable on its own: for a while in 2026 it pushed nothing to web
+sessions, and as of October 2026 it pushes again but with partial items
+(see [Two receive channels](#two-receive-channels)). instagram.com receives on
 
 ```
 wss://gateway.instagram.com/ws/lightspeed?x-dgw-appid=936619743392459
@@ -60,6 +62,34 @@ shape as the GraphQL reads. The `seq_id`/`snapshot_at_ms` come from
 
 **Message requests** (threads in `system_folder: PENDING`) get no deltas
 at all until accepted; replying to the thread accepts it.
+
+### Two receive channels
+
+When iris pushes, every new message arrives on both channels. Measured on
+two accounts in October 2026 (12 messages, time from the sender's publish):
+
+| channel | arrival | item shape |
+|---|---|---|
+| MQTT iris `/ig_message_sync` | 640-1030 ms | old REST item (`item_type`, `text`, `clip`, ...) |
+| lightspeed | 740-1150 ms (60-130 ms later) | slide node, same as the GraphQL reads |
+
+Both carry the same `message_id` (`mid.$…`) and offline threading id
+(`client_context` on iris, `offline_threading_id` on lightspeed), and both
+cursors are the same sequence (`seq_id` on iris equals `uq_seq_id` on
+lightspeed), so either one can resume the other.
+
+The iris copy is incomplete for anything but text: a shared post arrives as
+`{"item_type": "media_share"}` with **no media at all**, a shared reel nests
+the media under `clip.clip`, and a voice note has no audio URL yet. Aerogram
+therefore dispatches:
+
+- **text** from whichever channel delivers first (identical on both);
+- **media and share cards** from lightspeed; the iris copy is held for
+  `Client.MEDIA_FALLBACK_DELAY` (3 s) and only dispatched if the lightspeed
+  copy never arrives (or immediately when lightspeed is down). Held copies
+  are flushed on `stop()`, because the cursor has already moved past them.
+
+Duplicates are dropped by `message_id` / threading id.
 
 ## Layer 1 - MQTT 3.1 over WebSocket (sends; legacy receive)
 
@@ -175,9 +205,19 @@ Aerogram tracks the highest `seq_id` and turns each op into a `Delta`:
 
 ## Layer 2 - sends
 
-Two channels, mirroring the web client:
+Two channels, mirroring the web client. Measured from a pushed message to
+the reply arriving on the other account (October 2026, warm connections):
 
-### MQTT fast path: `/ig_send_message`
+| path | call returns | reply arrives |
+|---|---|---|
+| GraphQL `IGDirectTextSendMutation` | ~0.7 s | ~0.62 s |
+| MQTT `/ig_send_message` | ~1.0 s | ~0.85 s |
+
+The MQTT ack comes 100-300 ms *after* the recipient already has the
+message. `Message.reply_text` uses the GraphQL path whenever the
+`thread_fbid` is known, and MQTT otherwise.
+
+### MQTT: `/ig_send_message`
 
 ```json
 {"action": "send_item", "item_type": "text", "text": "hi",
@@ -271,6 +311,21 @@ mute, message-list pagination). Key and fbid are often different. Messages are
 
 Username → user id has no cheap query; the web client resolves it from the
 profile page document (`"profile_id":"<pk>"`), which aerogram mirrors.
+
+### Connections and retries
+
+instagram.com closes an idle HTTP connection after 60-120 s, and a cold
+TCP+TLS handshake added 0.4-1 s to the next request. Aerogram keeps pooled
+connections for 50 s (`KEEPALIVE_EXPIRY`, safely under the server's limit
+so a closed socket is never reused) and, after 40 s without traffic, makes
+a tiny `GET /robots.txt` to keep one warm (`HttpApi.keep_warm`). The page
+tokens are fetched at `start()` instead of on the first send. HTTP/2 was
+measured and is no faster here.
+
+Mutations (sends, uploads) are retried **only** when the connection could
+not be opened, since nothing reached the server. Any later failure (a read
+timeout, a dropped connection) is raised, because the server may already
+have applied the send and a retry could post it twice.
 
 ## Layer 3 - REST
 

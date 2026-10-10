@@ -2,7 +2,11 @@
 
 Aerogram connects to Instagram's realtime transports on `start()` and feeds
 every incoming update through your handlers. Incoming messages arrive on
-the web client's *lightspeed* stream (see [protocol.md](protocol.md)).
+the web client's *lightspeed* stream, and often also on the MQTT socket a
+little earlier. Aerogram merges the two: each message reaches your handler
+once, text as soon as either channel has it, and media and shared
+reels/posts in their complete form (see
+[protocol.md](protocol.md#two-receive-channels)).
 
 > **Message requests are not delivered in realtime.** DMs from accounts
 > that don't follow you land in *Requests*, and Instagram pushes nothing

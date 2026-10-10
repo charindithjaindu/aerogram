@@ -268,11 +268,11 @@ class Message:
         return self.media is not None
 
     async def reply_text(self, text: str) -> "Message":
-        if self.thread_id:
-            return await self.client.send_text(self.thread_id, text)
-        # thread not resolvable to its long id (not in the recent inbox):
-        # the GraphQL send only needs thread_fbid
-        return await self.client.send_text_to_fbid(self.thread_fbid, text)
+        # the GraphQL send is the web client's own path: ~0.2s faster to
+        # arrive than the MQTT send and independent of the socket's state
+        if self.thread_fbid:
+            return await self.client.send_text_to_fbid(self.thread_fbid, text)
+        return await self.client.send_text(self.thread_id, text)
 
     async def mark_seen(self) -> None:
         await self.client.mark_seen(self.thread_id, self.item_id)
