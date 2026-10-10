@@ -222,3 +222,96 @@ async def test_download_into_folder_keeps_cdn_name(tmp_path):
     path = await c.download("https://cdn.example/v/pic.jpg?x=1", folder)
     assert path == str(tmp_path / "downloads" / "pic.jpg")
     assert open(path, "rb").read() == b"img"
+
+
+def _iris_delta(item, n=0):
+    from aerogram.iris import Delta
+    d = Delta(op="add", path=f"/direct_v2/threads/111/items/{n}",
+              value=json.dumps(item), seq_id=100 + n)
+    d.parse_path()
+    return d
+
+
+def _collect(c):
+    got = []
+
+    @c.on_message()
+    async def h(client, m):
+        got.append(m)
+    return got
+
+
+class _UpStream:
+    connected = True
+
+    async def stop(self):
+        pass
+
+
+def test_mqtt_shared_reel_parses_as_clip():
+    from aerogram.types import Media
+    m = Media.parse({"item_type": "clip", "clip": {"clip": {
+        "pk": 399, "id": "399_57", "code": "Dd_4", "video_duration": 24.0}}})
+    assert (m.media_type, m.id, m.url) == ("clip", "399", "https://www.instagram.com/reel/Dd_4/")
+    # a shared post can arrive with no media payload at all
+    assert Media.parse({"item_type": "media_share"}).media_type == "media_share"
+
+
+@pytest.mark.asyncio
+async def test_mqtt_text_dispatches_at_once_with_thread_fbid(tmp_path):
+    c = make_client(tmp_path)
+    t = full_thread(tid="111")
+    t.fbid = "fb111"
+    c._store_thread(t)
+    c._lightspeed = _UpStream()
+    got = _collect(c)
+    await c._handle_delta(_iris_delta({"item_type": "text", "text": "hi",
+                                       "user_id": "42", "message_id": "mid.1"}))
+    await c.dispatcher.wait()
+    assert [(m.text, m.thread_fbid) for m in got] == [("hi", "fb111")]
+
+
+@pytest.mark.asyncio
+async def test_mqtt_media_waits_for_the_complete_lightspeed_copy(tmp_path):
+    c = make_client(tmp_path)
+    c.MEDIA_FALLBACK_DELAY = 0.05
+    c._store_thread(full_thread(tid="111"))
+    c._lightspeed = _UpStream()
+    got = _collect(c)
+    await c._handle_delta(_iris_delta({"item_type": "media_share", "user_id": "42",
+                                       "message_id": "mid.2", "client_context": "9"}))
+    assert c._fallback_tasks and not got          # held back
+    await c._handle_slide_delta({"__typename": "SlideUQPPNewMessage", "thread_fbid": "fb111",
+                                 "message": {"message_id": "mid.2", "offline_threading_id": "9",
+                                             "content": {}, "text_body": "slide copy"}})
+    import asyncio
+    await asyncio.sleep(0.1)
+    await c.dispatcher.wait()
+    assert [m.text for m in got] == ["slide copy"]  # lightspeed copy won, no duplicate
+
+
+@pytest.mark.asyncio
+async def test_mqtt_media_falls_back_when_lightspeed_is_silent(tmp_path):
+    import asyncio
+    c = make_client(tmp_path)
+    c.MEDIA_FALLBACK_DELAY = 0.05
+    c._store_thread(full_thread(tid="111"))
+    c._lightspeed = _UpStream()
+    got = _collect(c)
+    await c._handle_delta(_iris_delta({"item_type": "media_share", "user_id": "42",
+                                       "message_id": "mid.3"}))
+    await asyncio.sleep(0.1)
+    await c.dispatcher.wait()
+    assert [m.message_id for m in got] == ["mid.3"]
+
+
+@pytest.mark.asyncio
+async def test_stop_flushes_held_mqtt_copies(tmp_path):
+    c = make_client(tmp_path)
+    c._store_thread(full_thread(tid="111"))
+    c._lightspeed = _UpStream()
+    got = _collect(c)
+    await c._handle_delta(_iris_delta({"item_type": "media_share", "user_id": "42",
+                                       "message_id": "mid.4"}))
+    await c.stop()
+    assert [m.message_id for m in got] == ["mid.4"]

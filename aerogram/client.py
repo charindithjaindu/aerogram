@@ -29,7 +29,7 @@ from .http_api import DEFAULT_UA, HttpApi
 from .iris import Delta, Realtime
 from .lightspeed import Lightspeed
 from .session import Session
-from .types import Media, Message, Thread, User
+from .types import TEXT, Media, Message, Thread, User
 
 log = logging.getLogger("aerogram")
 
@@ -42,6 +42,10 @@ def _ms(v) -> Optional[int]:
 
 
 class Client:
+    # how long an MQTT copy of a media/share message waits for the complete
+    # lightspeed copy before it is dispatched itself (see _handle_delta)
+    MEDIA_FALLBACK_DELAY = 3.0
+
     def __init__(
         self,
         name: str,
@@ -102,6 +106,7 @@ class Client:
         self._started = False
         self._lightspeed: Optional[Lightspeed] = None
         self._seen_message_ids: dict[str, None] = {}  # insertion-ordered dedupe window
+        self._fallback_tasks: dict[asyncio.Task, tuple[Message, str]] = {}
         self._fbid_miss: dict[str, float] = {}  # thread_fbid -> last failed lookup
         self._last_seq_persist = 0.0
         self._persisted_seq = self.session.seq_id
@@ -164,6 +169,10 @@ class Client:
             await self._lightspeed.stop()
         if self._realtime:
             await self._realtime.stop()
+        # the cursor is already past held MQTT copies: hand them out now
+        for task, (message, thread_id) in list(self._fallback_tasks.items()):
+            task.cancel()
+            await self._dispatch_iris_message(message, thread_id)
         try:
             await self.dispatcher.wait(timeout=10.0)
         except Exception:
@@ -334,6 +343,7 @@ class Client:
             thread = await self._thread_for_fbid(fbid)
             message = Message.parse_slide(node, thread_id=thread.id if thread else "",
                                           viewer_id=str(self.user_id or ""))
+            message.thread_fbid = message.thread_fbid or fbid
             message.client = self
             message.thread = thread
             if not self.receive_own_messages and message.is_sent_by_viewer:
@@ -353,6 +363,24 @@ class Client:
             await self.dispatcher.dispatch(MESSAGE_DELETE, self, message)
         self._maybe_persist_seq()
 
+    async def _iris_fallback(self, message: Message, thread_id: str) -> None:
+        await asyncio.sleep(self.MEDIA_FALLBACK_DELAY)
+        await self._dispatch_iris_message(message, thread_id)
+
+    async def _dispatch_iris_message(self, message: Message, thread_id: str) -> None:
+        if not self._first_sighting(message.message_id, "otid:" + message.client_context
+                                    if message.client_context else ""):
+            return
+        if not self.receive_own_messages and message.is_sent_by_viewer:
+            return
+        cached = self._threads.get(thread_id)
+        message.thread = cached
+        if cached is not None:
+            message.thread_fbid = message.thread_fbid or cached.fbid
+            cached.messages.insert(0, message)
+            del cached.messages[self.max_cached_messages:]
+        await self.dispatcher.dispatch(MESSAGE, self, message)
+
     def _maybe_persist_seq(self) -> None:
         # Persist the cursor periodically: only saving on stop() means a crash
         # replays every delta since the last graceful shutdown through the
@@ -370,18 +398,18 @@ class Client:
             raw.setdefault("item_id", delta.item_id)
             message = Message.parse(raw, thread_id=delta.thread_id)
             message.client = self
-            if not self._first_sighting(message.message_id, "otid:" + message.client_context
-                                        if message.client_context else ""):
-                return
-            if not self.receive_own_messages and message.is_sent_by_viewer:
-                return
-            cached = self._threads.get(delta.thread_id)
-            message.thread = cached
-            if cached is not None:
-                cached.messages.insert(0, message)
-                if len(cached.messages) > self.max_cached_messages:
-                    del cached.messages[self.max_cached_messages:]
-            await self.dispatcher.dispatch(MESSAGE, self, message)
+            if message.item_type != TEXT and self._lightspeed is not None \
+                    and self._lightspeed.connected:
+                # The MQTT copy of a media / share item can be partial (a
+                # shared post arrives with no media at all), so give the
+                # lightspeed copy - the complete one - a head start and only
+                # dispatch this one if it never shows up. Plain text is
+                # identical on both channels and goes out at once.
+                task = asyncio.create_task(self._iris_fallback(message, delta.thread_id))
+                self._fallback_tasks[task] = (message, delta.thread_id)
+                task.add_done_callback(lambda t: self._fallback_tasks.pop(t, None))
+            else:
+                await self._dispatch_iris_message(message, delta.thread_id)
         elif delta.is_removed_message:
             raw = delta.value_as_dict()
             raw.setdefault("item_id", delta.item_id)

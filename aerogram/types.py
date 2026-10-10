@@ -99,7 +99,19 @@ class Media:
             return cls(media_type="voice_media", id=str(vm.get("id") or ""),
                        url=vm.get("audio_src") or item.get("audio_src") or "",
                        duration_seconds=float(vm.get("audio_duration") or 0.0), raw=vm)
-        if item_type in ("media", "media_share", "clip", "felix_share"):
+        if item_type in ("clip", "media_share"):
+            # shared reel / post: ``clip.clip`` / ``media_share`` hold the
+            # media itself (Instagram sometimes sends media_share empty)
+            m = (item.get("clip") or {}).get("clip") or item.get("media_share") or {}
+            videos = m.get("video_versions") or []
+            images = (m.get("image_versions2") or {}).get("candidates") or []
+            code = m.get("code") or ""
+            link = f"https://www.instagram.com/{'reel' if item_type == 'clip' else 'p'}/{code}/" if code else ""
+            return cls(media_type=item_type, id=str(m.get("pk") or str(m.get("id") or "").split("_")[0]),
+                       url=link or (videos[0].get("url") if videos else ""),
+                       thumbnail_url=images[0].get("url") if images else "",
+                       duration_seconds=float(m.get("video_duration") or 0.0), raw=m)
+        if item_type in ("media", "felix_share"):
             m = item.get("media") or {}
             videos = m.get("video_versions") or []
             images = (m.get("image_versions2") or {}).get("candidates") or []
