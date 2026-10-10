@@ -82,7 +82,7 @@ async def test_handler_exception_isolated():
 @pytest.mark.asyncio
 async def test_handlers_run_concurrently_not_inline():
     """Regression: a handler that awaits (e.g. replying over the realtime
-    channel) must not block the dispatch loop — the read loop used to await
+    channel) must not block the dispatch loop - the read loop used to await
     handlers inline, deadlocking any send made from inside a handler."""
     d = Dispatcher()
     release = asyncio.Event()

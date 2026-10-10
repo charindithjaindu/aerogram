@@ -12,7 +12,7 @@ Python 3.11 or newer is required.
 
 ## 2. Export your session
 
-Aerogram authenticates with your browser's cookies — no password, no app
+Aerogram authenticates with your browser's cookies - no password, no app
 login.
 
 1. Log into [instagram.com](https://www.instagram.com) in your desktop browser.
@@ -34,7 +34,7 @@ from aerogram import Client
 app = Client("my_session", cookies_file="session/cookies.txt")
 ```
 
-- `"my_session"` names the session — state is stored in `my_session.session.json`
+- `"my_session"` names the session - state is stored in `my_session.session.json`
   next to your script (cookies, device id and the realtime cursor).
 - Alternatives: `cookies={"sessionid": ...}` (dict) or
   `session_string=...` (portable base64 blob from `app.export_session_string()`).
@@ -79,7 +79,7 @@ The first message to someone creates the conversation automatically.
 
 ## 6. Keep the session alive
 
-- Don't log out of instagram.com in the browser you exported from — that
+- Don't log out of instagram.com in the browser you exported from - that
   invalidates the session.
 - If requests suddenly redirect to login, export fresh cookies and re-run.
 - A single 302 right after a fresh export is normal (server-side session

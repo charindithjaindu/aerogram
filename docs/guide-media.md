@@ -37,7 +37,7 @@ Shared posts and reels arrive as share cards: `media.media_type` is
 cards (profiles, stories, links). `media.id` is the post/reel media id,
 `media.url` its link and `media.thumbnail_url` the preview image.
 
-Share one (back) as a real card — the bare media id works for both:
+Share one (back) as a real card - the bare media id works for both:
 
 ```python
 if message.media and message.media.media_type in ("clip", "media_share"):
@@ -81,7 +81,7 @@ Under the hood (see [protocol.md](protocol.md) for the whole story):
 2. the `IGDirectMediaSendMutation` GraphQL mutation publishes it into the
    thread.
 
-The thread must already exist for photos — call
+The thread must already exist for photos - call
 `send_message(user, "...")` once first for brand-new contacts.
 
 ## Limitations

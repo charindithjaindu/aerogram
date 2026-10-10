@@ -1,6 +1,6 @@
 """Low-level REST wrapper for Instagram's web API (cookie auth).
 
-Only GET endpoints and uploads are needed here for DM work — sends ride the
+Only GET endpoints and uploads are needed here for DM work - sends ride the
 realtime MQTT channel (exactly what instagram.com's own client does).
 Includes the reliability plumbing: retries with backoff, 429/Retry-After
 handling, csrf-cookie rotation tracking and typed error mapping.
@@ -99,7 +99,7 @@ class HttpApi:
                 # transport errors.
                 if post:
                     raise InstaDMError(
-                        f"POST {url} failed ({type(e).__name__}: {e}) — not "
+                        f"POST {url} failed ({type(e).__name__}: {e}) - not "
                         "retried to avoid duplicating a possibly-applied "
                         "mutation") from e
                 await asyncio.sleep(0.5 * (2 ** attempt) + random.random())
@@ -126,7 +126,7 @@ class HttpApi:
                 loc = resp.headers.get("location", "")
                 if "/accounts/login" in loc or "/accounts/challenge" in loc or "/challenge" in loc:
                     raise AuthError(
-                        "Instagram redirected to login/challenge — the session "
+                        "Instagram redirected to login/challenge - the session "
                         "cookies are invalid, expired or the account needs a checkpoint. "
                         "Export fresh cookies and rebuild the session.")
                 raise InstaDMError(f"Unexpected redirect {resp.status_code} -> {loc}")
@@ -168,7 +168,7 @@ class HttpApi:
     # -- DM endpoints ---------------------------------------------------------
     #
     # Instagram removed the web REST DM routes (/direct_v2/inbox/, threads/…,
-    # seen/hide/mute, get_presence) — they now return the HTML 404 page. The
+    # seen/hide/mute, get_presence) - they now return the HTML 404 page. The
     # web client reads DMs through persisted GraphQL queries instead; the doc
     # ids below were captured from instagram.com's bundles.
 
@@ -324,7 +324,7 @@ class HttpApi:
         """Load instagram.com as a browser would and extract the session tokens
         /api/graphql requires (fb_dtsg, lsd, haste session, spin revision...).
 
-        The full browser document-header set is required — without
+        The full browser document-header set is required - without
         ``Sec-Fetch-*``/``sec-ch-ua`` Instagram renders an anonymous shell with
         an empty DTSG token.
         """
@@ -356,7 +356,7 @@ class HttpApi:
             tokens["__spin_t"] = grab(r'"__spin_t":([0-9]+)')
             if not tokens["fb_dtsg"]:
                 raise AuthError(
-                    "page render came back without a DTSG token — the session "
+                    "page render came back without a DTSG token - the session "
                     "cookies are likely invalid/expired")
             log.debug("page tokens refreshed (dtsg=%.10s…)", tokens["fb_dtsg"])
             self._page_cache = tokens
@@ -386,7 +386,7 @@ class HttpApi:
             if resp.status_code in (301, 302, 303, 307, 308):
                 raise AuthError(
                     f"graphql {friendly_name} redirected to "
-                    f"{resp.headers.get('location', '')} — session cookies are invalid")
+                    f"{resp.headers.get('location', '')} - session cookies are invalid")
             if resp.status_code != 200:
                 raise InstaDMError(
                     f"graphql {friendly_name} failed: {resp.status_code} {resp.text[:200]}")
@@ -394,7 +394,7 @@ class HttpApi:
             # the first one carries the data
             body = self._strip_for_prefix(resp.text).lstrip()
             js = json.loads(body.split("\n", 1)[0]) if "\n" in body else json.loads(body)
-            # 1357001/1357004: fb_dtsg/lsd expired — re-render the page once
+            # 1357001/1357004: fb_dtsg/lsd expired - re-render the page once
             if js.get("error") in (1357001, 1357004) and attempt == 0:
                 log.info("graphql page tokens expired; refreshing")
                 self._page_cache = {}

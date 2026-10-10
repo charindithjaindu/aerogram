@@ -19,7 +19,7 @@ await app.send_message("some_username", "hello!")
 await app.send_text(thread_id, "hello!")
 ```
 
-Goes over the realtime MQTT send channel — lowest latency, confirmed by
+Goes over the realtime MQTT send channel - lowest latency, confirmed by
 `/ig_send_message_response`. Use this when you already know the `thread_id`
 (e.g. from an incoming `message.thread_id`).
 
@@ -28,7 +28,7 @@ Goes over the realtime MQTT send channel — lowest latency, confirmed by
 ```python
 @app.on_message(filters.text & ~filters.self)
 async def handler(client, message):
-    await app.send_message("me", None)          # nonsense — don't
+    await app.send_message("me", None)          # nonsense - don't
     await message.reply_text("quoting you!")    # simple
     # or explicitly:
     await app.send_text(message.thread_id, "quoting you!", reply_to=message)
@@ -82,7 +82,7 @@ try:
 except RateLimited as e:
     print("back off for", e.retry_after, "seconds")
 except AuthError:
-    print("session dead — export fresh cookies")
+    print("session dead - export fresh cookies")
 except NotFoundError:
     print("no such user/thread")
 ```

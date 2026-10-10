@@ -217,7 +217,7 @@ class MqttClient:
     async def publish(self, topic: str, payload: bytes | str, qos: int = 1,
                       await_puback: bool = False) -> None:
         """Publish. The broker generally does not ack QoS-1 publishes on the
-        /ig_* topics — application-level response topics are the real ack, so
+        /ig_* topics - application-level response topics are the real ack, so
         blocking on PUBACK is opt-in."""
         if isinstance(payload, str):
             payload = payload.encode()
@@ -348,7 +348,7 @@ class MqttClient:
                 silent_for = time.monotonic() - last_rx[0]
                 if silent_for > self._dead_timeout:
                     log.warning(
-                        "no MQTT traffic for %.0fs (keepalive is %ss) — "
+                        "no MQTT traffic for %.0fs (keepalive is %ss) - "
                         "assuming dead connection and forcing a reconnect",
                         silent_for, self._keepalive)
                     try:
@@ -369,7 +369,7 @@ class MqttClient:
             pass
         except Exception as e:
             # A send failure also breaks the read loop, which triggers the
-            # reconnect — this task just ends quietly.
+            # reconnect - this task just ends quietly.
             log.debug("ping loop ended (%s: %s)", type(e).__name__, e)
 
     async def _handle_publish(self, flags: int, body: bytes) -> None:

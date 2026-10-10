@@ -32,7 +32,7 @@ Each `message` is an [`aerogram.Message`](api.md#aerogram.Message):
 | `text`               | text content (empty for media-only messages)        |
 | `item_type`          | `"text"`, `"photo"`, `"video"`, `"voice_media"`, …  |
 | `media`              | parsed [`Media`](api.md#aerogram.Media) or `None`   |
-| `thread_id`          | conversation id — pass it back when sending         |
+| `thread_id`          | conversation id - pass it back when sending         |
 | `user_id`            | sender's numeric id                                 |
 | `message_id` / `item_id` | server message identifiers                      |
 | `is_sent_by_viewer`  | `True` if you sent it                               |

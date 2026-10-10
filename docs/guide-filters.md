@@ -73,5 +73,5 @@ async def log_it(client, message): ...
 async def reply_it(client, message): ...
 ```
 
-If the first handler in a group raises, later groups still run — register
+If the first handler in a group raises, later groups still run - register
 `@app.on_error` to see the exception.

@@ -6,8 +6,8 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Read, reply to, and send Instagram direct messages — text, photos, videos,
-voice notes, reels and posts — in realtime, using the session you're
+Read, reply to, and send Instagram direct messages - text, photos, videos,
+voice notes, reels and posts - in realtime, using the session you're
 already logged into in your browser. No password, no phone emulation.
 
 ```python
@@ -24,28 +24,28 @@ app.run()
 
 ## ✨ What you can do
 
-- **Get every DM the moment it arrives** — text, ❤ likes, links, photos,
+- **Get every DM the moment it arrives** - text, ❤ likes, links, photos,
   videos, voice notes, GIFs and shared reels/posts, each parsed into a
   `Message` with download links.
-- **Reply and send** — text to any username (new conversations included),
+- **Reply and send** - text to any username (new conversations included),
   photos, videos and voice notes, and **share reels and posts** as real
   cards.
 - **Reactions, typing indicators, mark-as-read, mute.**
-- **Read your inbox** — paginated thread list, full message history, user
+- **Read your inbox** - paginated thread list, full message history, user
   lookups by username or id.
-- **Download media** — photos, videos and voice notes to disk.
-- **Built for bots that stay up** — automatic reconnect without missing
+- **Download media** - photos, videos and voice notes to disk.
+- **Built for bots that stay up** - automatic reconnect without missing
   messages, rate-limit handling, typed errors.
 
 Bots are a few lines of handlers and filters (`filters.photo`,
-`filters.private & ~filters.self`, …) — see the [examples](#-examples).
+`filters.private & ~filters.self`, …) - see the [examples](#-examples).
 
 Not supported: message requests (DMs from people who don't follow you)
 aren't delivered in realtime until accepted, and end-to-end encrypted chats
 aren't reachable.
 
 > ⚠️ **Unofficial.** Aerogram talks to private Instagram endpoints. Automating
-> your account violates Instagram's Terms of Service — use it for personal
+> your account violates Instagram's Terms of Service - use it for personal
 > automation of conversations you're part of, at modest volumes. Accounts can
 > be rate-limited or challenge-gated. See [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -66,7 +66,7 @@ python -m pytest tests/
 ```
 
 Requires Python 3.11+. Dependencies: [`httpx`](https://www.python-httpx.org)
-and [`websockets`](https://websockets.readthedocs.io) — nothing heavy.
+and [`websockets`](https://websockets.readthedocs.io) - nothing heavy.
 
 ## 🚀 Getting started
 
@@ -75,7 +75,7 @@ and [`websockets`](https://websockets.readthedocs.io) — nothing heavy.
 extension → *Export → Netscape*, and save the file as `session/cookies.txt`.
 
 > 🔐 A `sessionid` cookie **is** full account access. Treat session files like
-> passwords — never commit or share them.
+> passwords - never commit or share them.
 
 **2. Build your bot.**
 
@@ -92,7 +92,7 @@ async def handler(client, message):
 app.run()
 ```
 
-That's it — the first run fetches your inbox, stores the realtime cursor in
+That's it - the first run fetches your inbox, stores the realtime cursor in
 `my_session.session.json`, and your handler fires for every incoming message.
 
 📖 **Full guide:** [docs/getting-started.md](docs/getting-started.md) ·
@@ -158,10 +158,10 @@ Aerogram talks to the same infrastructure the instagram.com web app does:
 | Reading  | GraphQL queries on `/api/graphql` (inbox, threads, profiles)               |
 | Auth     | Browser cookies                                                            |
 
-*"MQTT or WebSockets?"* — it's not either/or: the connection **is** a
+*"MQTT or WebSockets?"* - it's not either/or: the connection **is** a
 WebSocket; MQTT is the protocol Instagram's servers speak inside it. We mirror
-the web client's handshake byte-for-byte. The full reverse-engineering story
-— handshake, iris deltas, slide mutations, media uploads — is documented in
+the web client's handshake byte-for-byte. The full reverse-engineering story -
+handshake, iris deltas, slide mutations, media uploads - is documented in
 [docs/protocol.md](docs/protocol.md).
 
 ```
@@ -179,7 +179,7 @@ aerogram/
 
 ## 🤝 Contributing
 
-Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Protocol
+Issues and PRs welcome - see [CONTRIBUTING.md](CONTRIBUTING.md). Protocol
 drift fixes are especially valuable: Instagram ships constantly, and the
 debugging workflow in the contributing guide shows how to re-capture the
 web client's handshake when something breaks.
@@ -188,5 +188,5 @@ web client's handshake when something breaks.
 
 [MIT](LICENSE). This project is not affiliated with, endorsed by, or sponsored
 by Meta or Instagram. Use of private APIs may violate Instagram's Terms of
-Service; you are responsible for how you use this library. Be kind — don't
+Service; you are responsible for how you use this library. Be kind - don't
 build spam.

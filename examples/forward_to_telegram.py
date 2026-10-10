@@ -53,5 +53,5 @@ async def forward(client, message):
 
 
 if __name__ == "__main__":
-    print("forwarding DMs to Telegram — Ctrl+C to stop")
+    print("forwarding DMs to Telegram - Ctrl+C to stop")
     app.run()

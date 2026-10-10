@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 log = logging.getLogger("probe")
 
 COOKIES_FILE = "session/cookies.txt"
-# your own (or a consenting) account to test against — never a stranger
+# your own (or a consenting) account to test against - never a stranger
 TEST_USERNAME = os.environ.get("AEROGRAM_TEST_USER", "")
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
@@ -89,9 +89,9 @@ async def main() -> None:
     await rt.start()
     try:
         await asyncio.wait_for(iris_subscribed.wait(), timeout=20)
-        log.info("iris subscribed — now sending")
+        log.info("iris subscribed - now sending")
     except asyncio.TimeoutError:
-        log.error("iris subscribe got no response in 20s — sends will likely fail")
+        log.error("iris subscribe got no response in 20s - sends will likely fail")
 
     log.info("=== sending self-DM over MQTT send channel ===")
     marker = f"aerogram e2e probe {asyncio.get_event_loop().time():.0f}"

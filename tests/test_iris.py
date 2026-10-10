@@ -89,7 +89,7 @@ async def test_send_response_without_context_resolves_lone_pending():
 @pytest.mark.asyncio
 async def test_send_response_without_context_ambiguous_resolves_none():
     """Two sends in flight, response carries no client_context: pairing by
-    guesswork could hand one caller the other's result — leave both to time
+    guesswork could hand one caller the other's result - leave both to time
     out instead."""
     rt = make_realtime()
     loop = asyncio.get_running_loop()

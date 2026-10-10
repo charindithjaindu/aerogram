@@ -105,7 +105,7 @@ Fields: `op`, `path`, `value`, `mutation_token`, `seq_id`, `thread_id`,
 
 `text`, `photo`, `video`, `voice`, `media`, `self`, `me`, `incoming`,
 `private`, `group`, `Chat(id)`, `FromUser(uid)`, `Regex(pattern)`,
-`create(fn)` — all composable with `&`, `|`, `~`.
+`create(fn)` - all composable with `&`, `|`, `~`.
 
 ## Exceptions
 

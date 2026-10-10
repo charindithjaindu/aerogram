@@ -12,7 +12,7 @@ Aerogram authenticates with your **browser cookies** (mainly `sessionid`,
 
 The `seq_id` cursor is the reliability core: it records how far the realtime
 stream has been consumed. On every reconnect/restart Aerogram re-subscribes
-from that cursor and the broker **replays everything missed** — no message
+from that cursor and the broker **replays everything missed** - no message
 gaps, ever.
 
 ## Creating a session
@@ -33,12 +33,12 @@ If you pass no source, `Client` loads `<name>.session.json` if it exists.
 ## Exporting / moving
 
 ```python
-s = app.export_session_string()   # base64 blob — store it safely
+s = app.export_session_string()   # base64 blob - store it safely
 # on another machine:
 app = Client("my_session", session_string=s)
 ```
 
-The string contains the cookies **and** the realtime cursor — moving it means
+The string contains the cookies **and** the realtime cursor - moving it means
 the new instance continues gap-free.
 
 ## Lifecycle
@@ -53,11 +53,11 @@ the new instance continues gap-free.
 - **Never commit** `*.session.json` or cookie exports. They are git-ignored by
   default; keep it that way.
 - Logging out of instagram.com in the exporting browser invalidates the
-  `sessionid` — export from a browser session you'll keep, or re-export when
+  `sessionid` - export from a browser session you'll keep, or re-export when
   you rotate sessions.
 - Sessions can be invalidated server-side at any time (checkpoint, password
   change, suspicion). Aerogram raises `AuthError` when that happens; export
   fresh cookies to continue. See [troubleshooting.md](troubleshooting.md).
-- Instagram shows all *active sessions* under Settings → Security — the
+- Instagram shows all *active sessions* under Settings → Security - the
   cookie-based session appears there like any browser login, and you can kill
   it remotely.

@@ -1,6 +1,6 @@
 # The protocol (reverse-engineering notes)
 
-This page documents **how Aerogram talks to Instagram** — the full,
+This page documents **how Aerogram talks to Instagram** - the full,
 reproducible wire-level story. It exists so that (a) contributors can fix
 protocol drift without starting from zero, and (b) future maintainers can
 verify behaviour against the live web client.
@@ -18,7 +18,7 @@ All tokens/ids below are placeholders, obviously.
    (`scripts/probe_iris.py`), iterate until the broker accepts and messages
    flow.
 
-## Layer 0 — receiving: the lightspeed DGW stream
+## Layer 0 - receiving: the lightspeed DGW stream
 
 As of late 2026 the edge-chat MQTT iris subscription below still connects
 and accepts sends, but **pushes no DMs** to web sessions (`/ig_message_sync`
@@ -36,7 +36,7 @@ with the session cookies, `Origin: https://www.instagram.com`.
 **DGW framing** (binary WS messages, several frames may share one):
 `type:u8 | stream:u16le | length:u24le | payload`; Ping (9), Pong (10)
 and Empty (2) are a single byte. Types: EstabStream 15, Data 13, Ack 12,
-EndOfData 14. A Data payload starts with `ack:u16le` — bit 15 set means
+EndOfData 14. A Data payload starts with `ack:u16le` - bit 15 set means
 "ack me", answered by an Ack frame whose payload is the 15-bit id.
 
 **Session:** send EstabStream with payload `{}` plus one Data frame:
@@ -61,7 +61,7 @@ shape as the GraphQL reads. The `seq_id`/`snapshot_at_ms` come from
 **Message requests** (threads in `system_folder: PENDING`) get no deltas
 at all until accepted; replying to the thread accepts it.
 
-## Layer 1 — MQTT 3.1 over WebSocket (sends; legacy receive)
+## Layer 1 - MQTT 3.1 over WebSocket (sends; legacy receive)
 
 The web client connects to:
 
@@ -78,7 +78,7 @@ https://www.instagram.com`, and a normal browser User-Agent. No
 
 ### CONNECT
 
-MQTT **3.1** (`MQIsdp`, protocol level 3 — not 3.1.1):
+MQTT **3.1** (`MQIsdp`, protocol level 3 - not 3.1.1):
 
 ```
 fixed header: 0x10 <varint length>
@@ -86,7 +86,7 @@ variable header: "MQIsdp" | level=0x03 | flags=0x82 (clean + username) | keepali
 payload: clientId="mqttwsclient", username=<auth JSON>, no password
 ```
 
-The MQTT **username is a JSON blob** — this is the auth:
+The MQTT **username is a JSON blob** - this is the auth:
 
 ```json
 {
@@ -111,7 +111,7 @@ The MQTT **username is a JSON blob** — this is the auth:
 
 Notes:
 
-- `u` is the FB-style viewer id — derivable from the `rur` cookie
+- `u` is the FB-style viewer id - derivable from the `rur` cookie
   (`rur=CCO,<viewer>,<...>:<hmac>`), not the `ds_user_id`.
 - auth is bound to the **cookies** in the WS upgrade; CONNACK `rc=0` means
   accepted, `rc=4/5` means the cookies were rejected.
@@ -142,7 +142,7 @@ refetch the REST inbox for a fresh `seq_id` and re-subscribe),
 `error_type: 2` = transient (retry with backoff, 1s→64s).
 
 **The `seq_id` mechanism is what makes delivery gap-free:** the broker
-replays every iris event since your last acknowledged sequence id — across
+replays every iris event since your last acknowledged sequence id - across
 reconnects, restarts, even process crashes (Aerogram persists it in the
 session file).
 
@@ -173,7 +173,7 @@ Aerogram tracks the highest `seq_id` and turns each op into a `Delta`:
 | `/direct_v2/inbox/threads/<tid>`                     | thread add/replace   |
 | `/direct_v2/inbox/unseen_count`                      | badge counter        |
 
-## Layer 2 — sends
+## Layer 2 - sends
 
 Two channels, mirroring the web client:
 
@@ -192,7 +192,7 @@ The same channel (per the web client) supports `item_type` values
 (`reaction_status` created/deleted + `emoji`), and the
 `indicate_activity` action for typing.
 
-Note: the broker does **not** PUBACK QoS-1 publishes on `/ig_*` topics — the
+Note: the broker does **not** PUBACK QoS-1 publishes on `/ig_*` topics - the
 application-level response topic is the ack.
 
 ### GraphQL slide mutations: `/api/graphql`
@@ -202,17 +202,17 @@ Auth is trickier than REST:
 
 - the POST needs a `fb_dtsg` token, which only appears in a **logged-in page
   render** of instagram.com (fetching the HTML with plain headers yields an
-  anonymous shell with an empty DTSG — you must send full browser document
+  anonymous shell with an empty DTSG - you must send full browser document
   headers: `Sec-Fetch-*`, `sec-ch-ua`, `Upgrade-Insecure-Requests`, and the
   `dpr` cookie);
 - `jazoest` = `"2" + sum(ord(c) for c in fb_dtsg)`;
 - `lsd` (from the same page) goes in the form **and** the `X-FB-LSD` header;
 - the request **must** carry `Sec-Fetch-Site: same-origin`,
-  `Sec-Fetch-Mode: cors`, `Sec-Fetch-Dest: empty` — otherwise the server
+  `Sec-Fetch-Mode: cors`, `Sec-Fetch-Dest: empty` - otherwise the server
   answers error `1357004` ("close and re-open your browser window");
 - error `1357054` = mutation input problem; `1357004` = auth problem.
 
-Text send (`IGDirectTextSendMutation`, doc `26911679871773184`) — variables
+Text send (`IGDirectTextSendMutation`, doc `26911679871773184`) - variables
 are **top-level** (the query wraps them into `data` itself):
 
 ```json
@@ -228,8 +228,8 @@ are **top-level** (the query wraps them into `data` itself):
  "forwarded_from_thread_id": null, "is_forwarded_from_own_message": null}
 ```
 
-Gotcha: `ig_thread_igid` is the thread's **`thread_fbid`** (not `thread_key`
-— the web composer passes `thread.thread_fbid`), while the
+Gotcha: `ig_thread_igid` is the thread's **`thread_fbid`** (not `thread_key` -
+the web composer passes `thread.thread_fbid`), while the
 media mutation wants the long `thread_id`.
 
 Media send (`IGDirectMediaSendMutation`, doc `25766288509716264`):
@@ -243,14 +243,14 @@ Media send (`IGDirectMediaSendMutation`, doc `25766288509716264`):
 
 Mark-thread-as-read (`useIGDMarkThreadAsReadMutation`, doc
 `27399783383056109`): `{"data": {"item_id": "", "message_id": "mid.$…"},
-"metadata": {"ig_thread_igid": "<long thread_id>"}}` — unlike the send
+"metadata": {"ig_thread_igid": "<long thread_id>"}}` - unlike the send
 mutation, the web client passes the long `thread_id` here.
 
 ### Reads (GraphQL queries)
 
 The web client no longer reads DMs over REST; everything goes through
 persisted queries on `/api/graphql` (same form/tokens as the mutations).
-Relay provider variables (`__relay_internal__pv__…`) must be sent too —
+Relay provider variables (`__relay_internal__pv__…`) must be sent too -
 see `HttpApi` for the exact sets.
 
 | query (doc id) | variables | result |
@@ -262,7 +262,7 @@ see `HttpApi` for the exact sets.
 | `PolarisProfilePageContentQuery` (`28036671149327607`) | `id` (user pk) | `data.user` |
 | `IGDInboxInfoMuteToggleOffMsysMutation` (`26360506043651125`) | `thread_fbid`, `mute_seconds` (-1 forever, 0 unmute), `offline_threading_id` | mute state |
 
-A thread carries three ids: `thread_id` (long, `34028236…` — iris paths,
+A thread carries three ids: `thread_id` (long, `34028236…` - iris paths,
 MQTT sends, media send, mark-read), `thread_key` (thread detail query,
 `/direct/t/<key>/` URLs) and `thread_fbid` (`ig_thread_igid` in text sends,
 mute, message-list pagination). Key and fbid are often different. Messages are
@@ -272,12 +272,12 @@ mute, message-list pagination). Key and fbid are often different. Messages are
 Username → user id has no cheap query; the web client resolves it from the
 profile page document (`"profile_id":"<pk>"`), which aerogram mirrors.
 
-## Layer 3 — REST
+## Layer 3 - REST
 
 Only `GET /api/v1/direct_v2/get_badge_count/` (iris `seq_id` fallback) is
-still used. The web REST DM routes — `direct_v2/inbox`,
+still used. The web REST DM routes - `direct_v2/inbox`,
 `direct_v2/threads/<tid>`, `…/seen/`, `…/hide/`, `…/mute/`,
-`direct_v2/get_presence`, `direct_v2/threads/broadcast/…` — now return the
+`direct_v2/get_presence`, `direct_v2/threads/broadcast/…` - now return the
 HTML 404 page, and `users/web_profile_info` / `users/<id>/info` are heavily
 429'd. Hide and presence have no web replacement.
 
@@ -285,4 +285,4 @@ HTML 404 page, and `users/web_profile_info` / `users/<id>/info` are heavily
 
 Every claim above was verified against the live web client and a real
 account; the debug scripts in `scripts/` re-verify each layer. When
-something breaks, re-capture and diff — and please PR the fix.
+something breaks, re-capture and diff - and please PR the fix.

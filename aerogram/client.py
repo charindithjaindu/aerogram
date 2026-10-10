@@ -1,4 +1,4 @@
-"""The high-level ``Client`` — the Pyrogram-like entry point.
+"""The high-level ``Client`` - the Pyrogram-like entry point.
 
     from aerogram import Client, filters
 
@@ -83,7 +83,7 @@ class Client:
                 self.session = Session.from_file(self.session_path)
             except FileNotFoundError:
                 raise InstaDMError(
-                    "no session source given — pass cookies_file=, cookies= or "
+                    "no session source given - pass cookies_file=, cookies= or "
                     "session_string=, or point at an existing session file")
 
         self.session.device_id = self.session.device_id or self.session.ig_did or str(uuid.uuid4())
@@ -283,7 +283,7 @@ class Client:
 
     async def _on_realtime_connect(self, is_reconnect: bool) -> None:
         if is_reconnect and self._started:
-            log.info("realtime reconnected — healing any gaps via fresh badge-count fetch")
+            log.info("realtime reconnected - healing any gaps via fresh badge-count fetch")
             try:
                 badge = await self.api.badge_count()
                 self.session.seq_id = max(self.session.seq_id, int(badge.get("seq_id") or 0))
@@ -458,7 +458,7 @@ class Client:
             resp = await self.api.send_text_message(
                 text, recipient_igids=[uid],
                 reply_to_message_id=reply_to.message_id if reply_to else None)
-            # a brand-new thread was just created server-side — pick it up so
+            # a brand-new thread was just created server-side - pick it up so
             # the returned Message carries the thread id and future sends to
             # this user hit the cache instead of re-scanning the inbox
             thread = await self.find_thread_for_user(to, scan_pages=1)
@@ -510,7 +510,7 @@ class Client:
                 thread = await self.find_thread_for_user(to)
                 if thread is None:
                     raise NotFoundError(
-                        f"no existing thread with user {to} — send a text with "
+                        f"no existing thread with user {to} - send a text with "
                         "send_message() first, then media will work")
             else:
                 thread = await self.get_thread(thread_id)

@@ -3,8 +3,8 @@
 Instagram's web client no longer gets incoming DMs over the edge-chat MQTT
 iris subscription (that socket still accepts ``/ig_send_message`` sends but
 pushes nothing). Messages now arrive on ``wss://gateway.instagram.com/ws/
-lightspeed`` as *slide deltas* — the same JSON node shapes the GraphQL
-queries return — wrapped in a tiny binary framing ("DGW") and protobuf.
+lightspeed`` as *slide deltas* - the same JSON node shapes the GraphQL
+queries return - wrapped in a tiny binary framing ("DGW") and protobuf.
 
 DGW frame: ``type:u8 | stream:u16le | length:u24le | payload``, except the
 one-byte ``Ping`` (9) / ``Pong`` (10) / ``Empty`` (2) frames. Data frames

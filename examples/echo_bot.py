@@ -49,5 +49,5 @@ def on_error(client, update, exc):
 
 
 if __name__ == "__main__":
-    print("echo bot running — Ctrl+C to stop")
+    print("echo bot running - Ctrl+C to stop")
     app.run()

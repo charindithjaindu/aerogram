@@ -6,7 +6,7 @@ This replicates exactly what instagram.com does:
    with the cookie-auth JSON as the MQTT username,
 2. SUBSCRIBE ``/ig_message_sync``, ``/ig_send_message_response``, ``/ig_sub_iris_response``,
 3. PUBLISH the iris subscribe request to ``/ig_sub_iris`` with the last known
-   ``seq_id`` — the broker then replays everything missed since that sequence,
+   ``seq_id`` - the broker then replays everything missed since that sequence,
    giving gap-free delivery across reconnects and restarts,
 4. DM actions (send text/like/media-share/reaction, typing) are published to
    ``/ig_send_message``; ``/ig_send_message_response`` confirms them.
@@ -178,7 +178,7 @@ class Realtime:
     # -- subscription -------------------------------------------------------
 
     async def _on_mqtt_reconnected(self, is_reconnect: bool) -> None:
-        # A fresh CONNACK is a fresh chance for the iris subscription —
+        # A fresh CONNACK is a fresh chance for the iris subscription -
         # reset the resnapshot counter for the new connection era.
         self._iris_resnapshots = 0
         # MQTT SUBSCRIBEs for the known topics are sent by MqttClient itself;
@@ -268,7 +268,7 @@ class Realtime:
                 # Stay connected-but-deaf is the worst outcome (the bot looks
                 # alive and silently receives nothing), so tear the transport
                 # down and let the reconnect loop try again from scratch.
-                log.error("iris resnapshot loop — forcing reconnect after %d attempts",
+                log.error("iris resnapshot loop - forcing reconnect after %d attempts",
                           self._iris_resnapshots)
                 if self._mqtt:
                     await self._mqtt.force_reconnect()
@@ -298,13 +298,13 @@ class Realtime:
         pending = self._pending_sends.pop(cc, None) if cc else None
         if pending is None and len(self._pending_sends) == 1:
             # response didn't echo client_context, but exactly one send is
-            # in flight — unambiguous. With several in flight we can't guess
+            # in flight - unambiguous. With several in flight we can't guess
             # which one this answers; better to let them time out than to
             # hand one caller another's response.
             pending = self._pending_sends.pop(next(iter(self._pending_sends)))
         elif pending is None and self._pending_sends:
             log.warning("send response without client_context while %d sends "
-                        "are pending — cannot pair it", len(self._pending_sends))
+                        "are pending - cannot pair it", len(self._pending_sends))
         if pending and not pending.future.done():
             if ok:
                 pending.future.set_result(resp.get("payload"))

@@ -1,4 +1,4 @@
-"""aerogram — automate Instagram direct messages from Python.
+"""aerogram - automate Instagram direct messages from Python.
 
 Quickstart::
 

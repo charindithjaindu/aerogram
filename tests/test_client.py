@@ -21,7 +21,7 @@ def full_thread(tid="111", uid="42", username="alice"):
 
 
 def test_store_thread_merges_partial_updates(tmp_path):
-    """Iris thread deltas are often partial patches — they must not clobber
+    """Iris thread deltas are often partial patches - they must not clobber
     the populated cache entry (users/v2_id/messages)."""
     c = make_client(tmp_path)
     c._store_thread(full_thread())

@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.2.0 — Instagram's new web DM transport
+## 0.2.0 - Instagram's new web DM transport
 
 Instagram removed the web REST DM API (`/direct_v2/inbox/`, `threads/…`,
 `seen`/`hide`/`mute`, `get_presence`, `broadcast/…` now return the HTML 404
-page). Reads moved to the GraphQL queries the web client itself uses — see
+page). Reads moved to the GraphQL queries the web client itself uses - see
 the new *Reads* section of `docs/protocol.md`.
 
 - **Fixed: `Client.start()` failed with `NotFoundError`.** The iris cursor
@@ -14,7 +14,7 @@ the new *Reads* section of `docs/protocol.md`.
 - **Fixed:** `get_inbox()` (paginated), `get_thread_history()` (paginated,
   newest first; the thread must be in the 3 newest inbox pages or cached), `find_thread_for_user()`, `thread_id_for_user()`,
   `send_message()` / `send_photo()` by username, `mute_thread()`.
-- **Fixed: `user_by_username()`** — resolves through the profile page
+- **Fixed: `user_by_username()`** - resolves through the profile page
   document + `PolarisProfilePageContentQuery`; the REST profile endpoints
   were 429ing persistently.
 - `mark_seen()` uses only the GraphQL mutation (REST fallback is gone) and
@@ -54,7 +54,7 @@ the new *Reads* section of `docs/protocol.md`.
 - Examples: `echo_bot.py` now echoes every message type (media re-upload,
   reel/post re-share); new `forward_to_telegram.py` and `send_media.py`.
 - Message requests are not delivered in realtime (Instagram pushes nothing
-  until a request is accepted) — documented, not handled.
+  until a request is accepted) - documented, not handled.
 - **Fixed: `send_message()` to an existing thread** now passes the thread's
   `thread_fbid` as `ig_thread_igid` (what the web composer sends);
   `HttpApi.send_text_message(thread_v2_id=)` is now `thread_fbid=`.
@@ -63,7 +63,7 @@ the new *Reads* section of `docs/protocol.md`.
   expects the numeric iris item id, so reacting to history messages is
   untested and likely fails. Messages received in realtime are unaffected.
 
-## 0.1.1 — reliability & performance fixes
+## 0.1.1 - reliability & performance fixes
 
 - **Fixed: sending from inside a handler deadlocked realtime.** Handlers now
   run as their own asyncio tasks (Pyrogram-style) instead of inline in the
@@ -79,7 +79,7 @@ the new *Reads* section of `docs/protocol.md`.
 - Failed connects no longer leak the websocket; iris resnapshot loops force
   a reconnect instead of staying connected-but-deaf.
 - The iris `seq_id` cursor is persisted periodically (every 30s of cursor
-  movement), not only on graceful `stop()` — a crash replays at most ~30s
+  movement), not only on graceful `stop()` - a crash replays at most ~30s
   of deltas instead of everything since the last shutdown.
 - Memory growth bounded: cached threads (default 500) and per-thread
   message history (default 200) are trimmed; a username/user-id → thread
@@ -98,7 +98,7 @@ the new *Reads* section of `docs/protocol.md`.
   matches the `additional_headers=` API actually used.
 - 41 offline unit tests (was 31).
 
-## 0.1.0 — first public release
+## 0.1.0 - first public release
 
 - Cookie-file session bootstrap (Netscape/cookies.txt export) with persisted
   iris `seq_id` cursor for gap-free realtime resume.

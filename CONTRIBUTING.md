@@ -16,7 +16,7 @@ python -m pytest tests/
 ## Ground rules
 
 1. **Never commit session data.** Cookies, `*.session.json` files and captured
-   traffic contain full account access. They are git-ignored — keep it that
+   traffic contain full account access. They are git-ignored - keep it that
    way. Scrub any IDs/tokens from logs and issue reports.
 2. **Test against your own account only.** Integration scripts under
    `scripts/` require `AEROGRAM_TEST_USER` to point at *your own* username so
@@ -37,8 +37,8 @@ python scripts/capture_ws.py          # CDP capture of the real web client
 python scripts/capture_send_ui.py     # capture the web client sending a DM
 ```
 
-If you fix drift, please open a PR describing exactly which handshake changed
-— that knowledge is the most valuable part of this repo.
+If you fix drift, please open a PR describing exactly which handshake changed -
+that knowledge is the most valuable part of this repo.
 
 ## Pull requests
 
@@ -49,6 +49,6 @@ If you fix drift, please open a PR describing exactly which handshake changed
 
 ## Reporting issues
 
-Include: Python version, the full traceback, and — if it's protocol drift —
+Include: Python version, the full traceback, and - if it's protocol drift -
 the failing endpoint plus what you observed. **Redact all cookies, session
 files and user ids.**

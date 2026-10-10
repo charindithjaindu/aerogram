@@ -33,7 +33,7 @@ class Dispatcher:
     """Dispatches updates to registered handlers.
 
     Each matched handler runs as its own asyncio task, so a slow handler
-    (or one that performs network I/O — e.g. ``await message.reply_text``)
+    (or one that performs network I/O - e.g. ``await message.reply_text``)
     never blocks the realtime receive loop. Updates are scheduled in
     arrival order, but handlers may complete out of order once they await.
     """
